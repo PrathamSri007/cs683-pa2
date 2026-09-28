@@ -1,0 +1,36 @@
+#include "cache.h"
+
+#define maxRRPV 3
+uint32_t l2_rrpv[L2C_SET][L2C_WAY];
+
+// initialize replacement state
+void CACHE::l2c_initialize_replacement()
+{
+    std::cout << "==========================================" << std::endl;
+    std::cout << "Initializing Dynamic IRRIP L2C replacement" << std::endl;
+    std::cout << "==========================================" << std::endl;
+}
+
+// find replacement victim
+uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
+{
+    
+    return 0;
+}
+
+// called on every cache hit and cache fill
+/*
+extend update_replacement_state() function for all cache types to accept isInstruction parameter of incoming packet. This will help the replacement policy know whether the packet received at the cache is an instruction or not. 
+For find_victim function you can directly access block[set][way].instruction to check whether the block holds instructions or not.
+
+*/
+void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit, uint8_t isInstruction)
+{
+    
+}
+
+// use this function to print out your own stats at the end of simulation
+void CACHE::l2c_replacement_final_stats()
+{
+
+}
