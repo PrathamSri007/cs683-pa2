@@ -1,16 +1,75 @@
 #include "cache.h"
+#define MAX_SEQ_LENGTH 5
+#define IP_TRACKER_COUNT 24 //why?
+#define PREFETCH_DEGREE 3
+#define MASK_IP 0xFF
 
+class IP_TRACKER { //one entry in the IP-pattern record table
+  public:
+    uint64_t ip; //ip being tracked
+    uint64_t last_cl_addr; //last accessed cache-line addr, at least I hope that's what cl means
+    
+    bool uniform; //is the access pattern uniform/constant-stride?
+    uint8_t seq_length; //the observed length of the repeating pattern e.g. (1, 2, 3)^n has 3. Capped at MAX_SEQ_LENGTH
+    uint8_t strides[MAX_SEQ_LENGTH]; //strides in the pattern
+
+    uint32_t lru; //use LRU to evict old IP trackers
+
+    IP_TRACKER () {
+        ip = 0;
+        last_cl_addr = 0;
+        seq_length = 0;
+        
+        uniform = true; //default assumption
+
+        lru = 0;
+    };
+};
+
+
+IP_TRACKER trackers[IP_TRACKER_COUNT];
 
 void CACHE::l1d_prefetcher_initialize() 
 {
     std::cout << "------------------------------------------------" << std::endl;
     std::cout << "        Stride Pattern Prefetcher (SPP)         " << std::endl;
     std::cout << "------------------------------------------------" << std::endl;
+    for (int i = 0; i < IP_TRACKER_COUNT; i++){
+        trackers[i].lru = i;
+    }
 }
 
 void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
 {
-   
+   uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE; //cache-line addr, same as IP-stride
+   ip = ip & MASK_IP;
+
+   //below: code only slightly modified  from ip_stride.l1d_pref, exact same logic of LRU eviction when a new IP is to be tracked
+    int index = -1;
+    for (index=0; index<IP_TRACKER_COUNT; index++) {
+        if (trackers[index].ip == ip)
+            break; //IP already there in table
+    }
+    if (index == IP_TRACKER_COUNT) { //new IP
+        for (index=0; index<IP_TRACKER_COUNT; index++) {
+            if (trackers[index].lru == (IP_TRACKER_COUNT-1))
+                break;
+        }
+        trackers[index].ip = ip;
+        trackers[index].last_cl_addr = cl_addr;
+        trackers[index].seq_length = 0;
+        tracker[index].uniform = true;
+        //cout << "[IP_STRIDE] MISS index: " << index << " lru: " << trackers[index].lru << " ip: " << hex << ip << " cl_addr: " << cl_addr << dec << endl;
+	    for (int i=0; i<IP_TRACKER_COUNT; i++) {
+            if (trackers[i].lru < trackers[index].lru)
+                trackers[i].lru++;
+        }
+        trackers[index].lru = 0;
+
+        return; //metadata_in;
+
+        //TODO: assert seq_length is < max somewhere
+    }
 }
 
 void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t v_evicted_addr, uint64_t evicted_addr, uint32_t metadata_in)
