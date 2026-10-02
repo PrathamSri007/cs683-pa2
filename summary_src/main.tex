@@ -1,0 +1,92 @@
+\documentclass[11pt]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{siunitx}
+\usepackage[most]{tcolorbox}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{microtype}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{hyperref}
+\include{listings}
+\sisetup{
+    detect-all,
+    group-separator={,},
+    group-minimum-digits=4,
+    table-number-alignment=center
+}
+
+\captionsetup{font=small, labelfont=bf, skip=7pt}
+
+\setlist[itemize]{topsep=3pt, itemsep=2pt, leftmargin=1.5em}
+\setlist[enumerate]{topsep=3pt, itemsep=4pt, leftmargin=1.7em}
+
+\titleformat{\section}{\Large\bfseries}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{18pt}{8pt}
+\titlespacing*{\subsection}{0pt}{14pt}{6pt}
+\titlespacing*{\subsubsection}{0pt}{11pt}{4pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\nouppercase{\leftmark}}
+\fancyhead[R]{\small CS683: PA2}
+\cfoot{\small Page \thepage\ of \pageref{LastPage}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=black,
+    pdftitle={CS683 PA2 - Summary},
+    pdfauthor={Siddhant Kaul, Pratham Srivastava, Dhruv Singla, Harshit Somani},
+    bookmarksopen=true
+}
+
+% ---- Shared helper macros used by both task1.tex and task2.tex ----
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+\newenvironment{needbox}
+  {\vspace{2mm}\noindent\begin{minipage}{\linewidth}\color{red}\ttfamily\small}
+  {\end{minipage}\vspace{2mm}}
+
+\title{\textbf{CS683: Advanced Computer Architecture} \\
+Programming Assignment 2 - Report \& Summary}
+\author{Siddhant Kaul \and Pratham Srivastava \and Dhruv Singla \and Harshit Somani}
+\date{Autumn 2026}
+
+\begin{document}
+
+\maketitle
+
+\clearpage
+\pagenumbering{arabic}
+\thispagestyle{empty}
+\tableofcontents
+% \clearpage
+\section{Task 1A: Understanding IP-Stride Prefetcher}
+The \texttt{ip\_stride.l1d\_pref} module defines an \texttt{IP\_TRACKER} class that represents a single row in the IP-stride table. It defines \verb|l1d_prefetcher_initialize|, \verb|l1d_prefetcher_operate|, \verb|l1d_prefetcher_cache_fill|, \verb|l1d_prefetcher_final_stats| under the \verb|CACHE| namespace, which the ChampsSim simulator will ostensibly call at the appropriate level of cache hierarchy, with the correct arguments.
+\\
+As explained by Prof. Biswa in class, the IP-stride prefetcher tracks the access pattern's `stride' that is observed emanating from a particular instruction address. If there is a strong indication of the stride being repeated, indicating a linear access pattern, the microarchitecture prefetches the next element following the pattern (latest address + observed stride).
+\\
+\verb|IP_TRACKER trackers[IP_TRACKER_COUNT];| is defined, representing \verb|IP_TRACKER_COUNT| rows of the table, each storing the tracked IP, previously accessed address, previous stride, and an index for LRU insertion/eviction of rows.
+\\
+\verb|l1d_prefetcher_operate| is the main callback that is executed every time a load reaches L1D, and contains the core logic of prefetching and table maintenance. When an address-IP pair arrives, it first checks if the IP is already being tracked (by looping through the table). If it is not, the LRU IP is evicted, the new IP is set to be the MRU, and the other indices' LRU indices are updated.
+\\
+Next, the stride for the new IP is calculated. \footnote{If it is a newly inserted IP, the function \texttt{return}s before reaching this part.} If it is equal to the last stride observed on that IP, prefetching ensues. If not, the standard address-last address, LRU and stride updations take place.
+\\
+For prefetching, \verb|prefetch_line| is called for the next address (as per the current address stride), only if the next address is in the same 4kB page. Depending on MSHR occupancy, prefetching is done to L1 (if not full) or L2 (if full).
+\end{document}
