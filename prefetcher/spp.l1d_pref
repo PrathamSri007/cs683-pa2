@@ -1,31 +1,42 @@
 #include "cache.h"
-#define MAX_SEQ_LENGTH 5
+#define MAX_PERIOD 5
 #define IP_TRACKER_COUNT 24 //why?
 #define PREFETCH_DEGREE 3
 #define MASK_IP 0xFF
+#define STRIDE_MAX_THRESH 16
+
+#define SAT_CNT_MAX MAX_PERIOD
+#define SAT_DECREMENT 3
+#define PREFETCH_DEGREE 3
+
+const uint8_t PREF_CONF_THRESH[MAX_PERIOD] = {1, 2, 3, 5, 5};
 
 class IP_TRACKER { //one entry in the IP-pattern record table
   public:
     uint64_t ip; //ip being tracked
-    uint64_t last_cl_addr; //last accessed cache-line addr, at least I hope that's what cl means
+    uint64_t last_cl_addr; //last accessed cache-line addr?
+    // bool uniform; //is the access pattern uniform/constant-stride?
     
-    bool uniform; //is the access pattern uniform/constant-stride?
-    uint8_t seq_length; //the observed length of the repeating pattern e.g. (1, 2, 3)^n has 3. Capped at MAX_SEQ_LENGTH
-    uint8_t strides[MAX_SEQ_LENGTH]; //strides in the pattern
+    int64_t strides[MAX_PERIOD]; //sliding window of observed strides
+    uint8_t conf[MAX_PERIOD]; //confidence values associated with candidate period 1 to MAX_PERIOD
 
     uint32_t lru; //use LRU to evict old IP trackers
 
     IP_TRACKER () {
         ip = 0;
         last_cl_addr = 0;
-        seq_length = 0;
-        
-        uniform = true; //default assumption
-
+        for (int i = 0; i < MAX_PERIOD; i++){
+            strides[i] = 0;
+            conf[i] = 0;
+        }
         lru = 0;
+        // seq_length = 0;
+        // last_stride_idx = 0;
+
+        // uniform = true; //default assumption
+
     };
 };
-
 
 IP_TRACKER trackers[IP_TRACKER_COUNT];
 
@@ -37,6 +48,15 @@ void CACHE::l1d_prefetcher_initialize()
     for (int i = 0; i < IP_TRACKER_COUNT; i++){
         trackers[i].lru = i;
     }
+}
+
+void conf_increment(uint8_t* count){ //handle the increment logic for the confidence counter
+    *count = (*count < SAT_CNT_MAX) ? (*count + 1) : (SAT_CNT_MAX);
+}
+
+void conf_decr(uint8_t* count){ //handle the decrement/reset logic for the confidence counter
+    // *count = 0; //or a decrement by a larger qty?
+    *count = (*count < SAT_DECREMENT)?(0):(*count - SAT_DECREMENT);
 }
 
 void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
@@ -57,8 +77,10 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
         }
         trackers[index].ip = ip;
         trackers[index].last_cl_addr = cl_addr;
-        trackers[index].seq_length = 0;
-        tracker[index].uniform = true;
+        for (int i = 0; i < MAX_PERIOD; i++){
+            trackers[index].strides[i] = 0;
+            trackers[index].conf[i] = 0;
+        }
         //cout << "[IP_STRIDE] MISS index: " << index << " lru: " << trackers[index].lru << " ip: " << hex << ip << " cl_addr: " << cl_addr << dec << endl;
 	    for (int i=0; i<IP_TRACKER_COUNT; i++) {
             if (trackers[i].lru < trackers[index].lru)
@@ -67,9 +89,73 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
         trackers[index].lru = 0;
 
         return; //metadata_in;
-
-        //TODO: assert seq_length is < max somewhere
     }
+    assert (index != -1);
+    
+    int64_t stride = 0; //calculating difference of two unsigned ints
+    if (cl_addr > trackers[index].last_cl_addr){
+        stride = cl_addr - trackers[index].last_cl_addr;
+    } else {
+        stride = trackers[index].last_cl_addr - cl_addr;
+        stride *= -1;
+    }
+    trackers[index].last_cl_addr = cl_addr;
+    
+
+    for (int i=0; i<IP_TRACKER_COUNT; i++) { //update LRU, since we are touching this row
+        if (trackers[i].lru < trackers[index].lru)
+            trackers[i].lru++;
+    }
+    trackers[index].lru = 0;
+
+    // TODO: can 0 stride be part of the sequence?
+    if ((stride == 0)){// || (stride > STRIDE_MAX_THRESH){ //0 or very large stride - noise, shouldn't be considered.
+        return;
+    }
+
+    for (uint8_t period = 1; period <= MAX_PERIOD; period++){//look through the possible periods from 1 (uniform) to MAX_PERIOD
+        if (trackers[index].strides[period-1] == stride){ //strides are inserted into the rolling window at 0 index, look at <period> accesses ago
+            conf_increment(trackers[index].conf + period - 1); //increment match counter corresponding to period (index = period-1), since we have a 'match' to this candidate period
+        } else {
+            conf_decr(trackers[index].conf + period - 1);
+        }
+    }
+
+    //update rolling window - insert from 0, shift right
+    for (int i = MAX_PERIOD - 1; i >= 1; i--){
+        trackers[index].strides[i] = trackers[index].strides[i - 1];
+    }
+    trackers[index].strides[0] = stride;
+
+    //only prefetch when confidence = MAX_PERIOD, i.e. has repeated fully at least once
+    for (uint8_t period = 1; period <= MAX_PERIOD; period++){
+        if (trackers[index].conf[period-1] >= PREF_CONF_THRESH[period-1]){
+            //prefetch this one: priority to smaller period: 
+            //multiple of the smaller period would also be positive when the smaller period is happening
+            int32_t pref_dist = 0; //initially
+            for (int i=0; i<PREFETCH_DEGREE; i++) {
+                // pref_dist += trackers[index].strides[MAX_PERIOD - 1 - ((MAX_PERIOD + i)%period)];
+                pref_dist += trackers[index].strides[period - 1 - (i % period)];
+
+                //the code below is copy-pasted from ip_stride.l1d_pref
+                uint64_t pf_address = (cl_addr + pref_dist) << LOG2_BLOCK_SIZE;
+
+                // only issue a prefetch if the prefetch address is in the same 4 KB page
+                // as the current demand access address
+                if ((pf_address >> LOG2_PAGE_SIZE) != (addr >> LOG2_PAGE_SIZE))
+                    break;
+
+                // check the MSHR occupancy to decide if we're going to prefetch to the L1 or L2
+                if (MSHR.occupancy < (MSHR.SIZE>>1))
+                    prefetch_line(ip, addr, pf_address, FILL_L1, 0);
+                else
+                    prefetch_line(ip, addr, pf_address, FILL_L2, 0);
+            }
+            break; 
+        }
+    }
+
+
 }
 
 void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t v_evicted_addr, uint64_t evicted_addr, uint32_t metadata_in)
