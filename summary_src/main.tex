@@ -19,7 +19,7 @@
 \usepackage{fancyhdr}
 \usepackage{lastpage}
 \usepackage{hyperref}
-\include{listings}
+
 \sisetup{
     detect-all,
     group-separator={,},
@@ -69,14 +69,14 @@ Programming Assignment 2 - Report \& Summary}
 \date{Autumn 2026}
 
 \begin{document}
-
+\include{listings}
 \maketitle
 
 \clearpage
 \pagenumbering{arabic}
 \thispagestyle{empty}
 \tableofcontents
-% \clearpage
+\clearpage
 \section{Task 1A: Understanding IP-Stride Prefetcher}
 The \texttt{ip\_stride.l1d\_pref} module defines an \texttt{IP\_TRACKER} class that represents a single row in the IP-stride table. It defines \verb|l1d_prefetcher_initialize|, \verb|l1d_prefetcher_operate|, \verb|l1d_prefetcher_cache_fill|, \verb|l1d_prefetcher_final_stats| under the \verb|CACHE| namespace, which the ChampsSim simulator will ostensibly call at the appropriate level of cache hierarchy, with the correct arguments.
 \\
@@ -89,4 +89,20 @@ As explained by Prof. Biswa in class, the IP-stride prefetcher tracks the access
 Next, the stride for the new IP is calculated. \footnote{If it is a newly inserted IP, the function \texttt{return}s before reaching this part.} If it is equal to the last stride observed on that IP, prefetching ensues. If not, the standard address-last address, LRU and stride updations take place.
 \\
 For prefetching, \verb|prefetch_line| is called for the next address (as per the current address stride), only if the next address is in the same 4kB page. Depending on MSHR occupancy, prefetching is done to L1 (if not full) or L2 (if full).
+
+\section{Task 1B: Implementing and Evaluating the Stride Pattern Prefetcher (SPP)}
+\subsection{Problem and Approaches}
+\par
+The task is broadly to implement and evaluate a prefetcher capable of recognising non-uniform stride patterns or sequences, such as $(+1, +2, +3,+1,+2)^n$ or the like. For this particular example the sequence length is 5; in general, it could be anything. Additionally, the problem statement requires us to implement accuracy-based throttling of prefetch requests. The initial challenge is to implement a prefetcher that can identify a uniform pattern as well as a repeating sequence of a length that is not known a priori.
+\par
+My first line of thinking was to maintain (per-IP) a rolling window of the last \verb|2*MAX_PERIOD| observed strides, where \verb|MAX_PERIOD| is the maximum length of the repeating sequence (the maximum possible period) the prefetcher will detect\footnote{We cannot detect arbitrarily long periods, because that necessarily requires arbitrarily large storage.}. Then, from that window, both the period and the sequence itself can be determined. This can be done by checking, for each  \verb|i = 0...2*MAX_PERIOD|, whether \verb|strides[i]| = \verb|strides[i+l] = strides[i+2*l] = ..|, within the limits, where \verb|strides| is the aforementioned rolling window of observed strides. If this is true for some \verb|l|, then \verb|l| is our stride, and we prefetch accordingly. This will, in fact, accurately detect whenever there exists a repeating sequence of length $\le$ \verb|MAX_PERIOD|. There are two issues with this, which are the reason I did not implement this architecture:
+\begin{itemize}
+    \item[--] This requires $2*\text{MAX\_PERIOD}\choose2$ equality checks, followed by some Boolean logic, to detect the period for each rolling window. There are probably ways to pipeline this logic so you don't actually require that many comparator circuits\footnote{Just a one-byte XOR, since we only have to check for equality.} in the hardware, but I did think the actual combinational circuit to be implemented would be expensive, hardware-wise, and scale poorly with \verb|MAX_PERIOD|.
+    \item[--] Storing \verb|2*MAX_PERIOD| seemed to be more storage than strictly required to detect up to \verb|MAX_PERIOD|.
+\end{itemize}
+For these reasons, I moved on from this initial approach. The approach implemented is described below, excluding accuracy throttling.
+\\
+Maintain, as in IP-stride, a table of IPs and associated stride data. Maintain a rolling window of the last (importantly) \verb|MAX_PERIOD| observed strides. Maintain saturating counters\footnote{Indicating confidence values the prefetcher associates with different possible period based on its observations} for different `candidate' periods, upto \verb|MAX_PERIOD|, including period = 1 (uniform). When a new stride arrives, check for equality with all the stored strides. For each of the `candidate' periods (1 to \verb|MAX_PERIOD|), if \verb|strides[current - period] = strides[current]|, then increment the saturating \verb|matches[period]|. If it is not equal, reset \verb|matches[period]| to zero. Finally, update the rolling window, throwing out the oldest value and bringing in the newest.
+\\
+Firstly, this \textit{works} because it will keep repeatedly penalise incorrect periods (which can be done by resetting to zero, or decrementing by a quantity $\ge$ 1), and invariably saturates the counter associated with the correct period, if the sequence repeats perfectly. Secondly, this reduces the size of the window that has to be stored by 50\%. Thirdly, the number of equality checks needed every time a new stride comes goes down to \verb|MAX_PERIOD|.
 \end{document}
