@@ -3,3 +3,4 @@ Trace*
 bin/*
 obj/*
 scripts/
+results/list_names.sh
