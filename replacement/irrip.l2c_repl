@@ -1,16 +1,82 @@
 #include "cache.h"
 
+/*
+todo: instr conscious rrip for l2
+keep instr lines longer than data lines. reference policy: rrip given in rrip.l2c_repl
+
+final policy (after testing multiple ones):
+insertion: same as srrip (inserted at rrpv 2)
+promotion: promote code lines to rrpv 0 and data lines to rrpv 1
+eviction: at rrpv 3, evict data lines first. if none at rrpv 3, increase rrpv by 1 for everyone
+
+writeback hits: an L1D writeback that hits in the L2 is not an access by the program because
+the L1D has just evicted the line. we leave the rrpv of such a line unchanged, so dirty
+data that the program is no longer using ages out and makes room for code. contrast: srrip
+promoted it to rrpv 0.
+
+*/
+
+#define maxRRPV 3
+uint32_t l2_rrpv[L2C_SET][L2C_WAY];
+
+// flags for easier testing
+static const uint32_t INS_INSTR = maxRRPV - 1; // insertion rrpv of a code line
+static const uint32_t INS_DATA  = maxRRPV - 1; // insertion rrpv of a data line (fixed)
+static const uint32_t PRO_INSTR = 0; // promotion rrpv of code line (fixed)
+static const uint32_t PRO_DATA  = 1; // promotion rrpv of data line
+
+// if 1, promote data line normally on writeback, if 0, ignore writeback
+static const bool WB_PROMOTE = 0; 
+
+// if 1, evict data line preferably, if 0, no change
+static const bool DATA_EVICT = 1; 
+
 // initialize replacement state
 void CACHE::l2c_initialize_replacement()
 {
     std::cout << "==================================" << std::endl;
     std::cout << "Initializing IRRIP L2C replacement" << std::endl;
+    std::cout << "IRRIP params: ins_instr=" << INS_INSTR << " ins_data=" << INS_DATA
+              << " pro_instr=" << PRO_INSTR << " pro_data=" << PRO_DATA
+              << " evict_data_first=" << DATA_EVICT << " wb_promote=" << WB_PROMOTE << std::endl;
     std::cout << "==================================" << std::endl;
+
+    for (int i=0; i<L2C_SET; i++) {
+        for (int j=0; j<L2C_WAY; j++) {
+            l2_rrpv[i][j] = maxRRPV;
+        }
+    }
 }
 
 // find replacement victim
+// current_set has valid bit and instruction bit (indicates whether code line or not)
 uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
 {
+    // invalid ways cost nothing, just use them
+    for (int i = 0; i < L2C_WAY; i++)
+        if (!current_set[i].valid)
+            return i;
+
+    // look for the maxRRPV line
+    while (1)
+    {
+        // prefer to evict data lines
+        if (DATA_EVICT)
+            for (int i=0; i<L2C_WAY; i++)
+                if (l2_rrpv[set][i] == maxRRPV && !current_set[i].instruction)
+                    return i;
+        
+        for (int i=0; i<L2C_WAY; i++)
+            if (l2_rrpv[set][i] == maxRRPV)
+                return i;
+
+        // nobody at rrpv 3
+        for (int i=0; i<L2C_WAY; i++)
+            l2_rrpv[set][i]++;
+    }
+
+    // WE SHOULD NOT REACH HERE
+    assert(0);
     return 0;
 }
 
@@ -20,8 +86,23 @@ extend update_replacement_state() function for all cache types to accept isInstr
 For find_victim function you can directly access block[set][way].instruction to check whether the block holds instructions or not.
 
 */
+
 void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit, uint8_t isInstruction)
 {
+    if ((type == WRITEBACK) && ip)
+        assert(0);
+
+    bool is_code = isInstruction && (type == LOAD || type == PREFETCH);
+
+    if (hit) {
+        // promote if not writeback
+        if (type == WRITEBACK && !WB_PROMOTE)
+            return;
+        l2_rrpv[set][way] = is_code ? PRO_INSTR : PRO_DATA;
+    } else {
+        // insertion
+        l2_rrpv[set][way] = is_code ? INS_INSTR : INS_DATA;
+    }
 }
 
 // use this function to print out your own stats at the end of simulation
