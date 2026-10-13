@@ -20,20 +20,32 @@ promoted it to rrpv 0.
 uint32_t l2_rrpv[L2C_SET][L2C_WAY];
 
 // flags for easier testing
-static const uint32_t INS_INSTR = maxRRPV - 1; // insertion rrpv of a code line
-static const uint32_t INS_DATA  = maxRRPV - 1; // insertion rrpv of a data line (fixed)
+static uint32_t INS_INSTR = maxRRPV - 1; // insertion rrpv of a code line
+static uint32_t INS_DATA  = maxRRPV - 1; // insertion rrpv of a data line
 static const uint32_t PRO_INSTR = 0; // promotion rrpv of code line (fixed)
-static const uint32_t PRO_DATA  = 1; // promotion rrpv of data line
+static uint32_t PRO_DATA  = 1; // promotion rrpv of data line
 
 // if 1, promote data line normally on writeback, if 0, ignore writeback
-static const bool WB_PROMOTE = 0; 
+static uint32_t WB_PROMOTE = 0; 
 
 // if 1, evict data line preferably, if 0, no change
-static const bool DATA_EVICT = 1; 
+static uint32_t DATA_EVICT = 1; 
+
+// read an unsigned knob from the environment (experiment harness only)
+static uint32_t env_knob(const char *name, uint32_t def)
+{
+    const char *v = getenv(name);
+    return v ? (uint32_t)strtoul(v, NULL, 10) : def;
+}
 
 // initialize replacement state
 void CACHE::l2c_initialize_replacement()
 {
+    INS_INSTR        = env_knob("IRRIP_INS_INSTR", INS_INSTR);
+    PRO_DATA         = env_knob("IRRIP_PRO_DATA", PRO_DATA);
+    DATA_EVICT       = env_knob("DATA_EVICT", DATA_EVICT);
+    WB_PROMOTE       = env_knob("IRRIP_WB_PROMOTE", WB_PROMOTE);
+
     std::cout << "==================================" << std::endl;
     std::cout << "Initializing IRRIP L2C replacement" << std::endl;
     std::cout << "IRRIP params: ins_instr=" << INS_INSTR << " ins_data=" << INS_DATA

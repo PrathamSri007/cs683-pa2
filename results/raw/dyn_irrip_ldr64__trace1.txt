@@ -20,15 +20,15 @@ Initializing Dynamic IRRIP L2C replacement
 DYN_IRRIP params: mode=0 threshold=25% hysteresis=0% leader_sets=64 (k=4) epoch=1024 code_weight=1
 ==========================================
 LLC has LRU replacement policy
-Heartbeat CPU 0 instructions: 10000002 cycles: 2954005 heartbeat IPC: 3.38524 cumulative IPC: 3.38524 (Simulation time: 0 hr 0 min 14 sec) 
-Heartbeat CPU 0 instructions: 20000001 cycles: 5915767 heartbeat IPC: 3.37637 cumulative IPC: 3.3808 (Simulation time: 0 hr 0 min 28 sec) 
+Heartbeat CPU 0 instructions: 10000002 cycles: 2954005 heartbeat IPC: 3.38524 cumulative IPC: 3.38524 (Simulation time: 0 hr 0 min 11 sec) 
+Heartbeat CPU 0 instructions: 20000001 cycles: 5915767 heartbeat IPC: 3.37637 cumulative IPC: 3.3808 (Simulation time: 0 hr 0 min 22 sec) 
 
-Warmup complete CPU 0 instructions: 25000004 cycles: 7350331 (Simulation time: 0 hr 0 min 34 sec) 
+Warmup complete CPU 0 instructions: 25000004 cycles: 7350331 (Simulation time: 0 hr 0 min 27 sec) 
 
-Heartbeat CPU 0 instructions: 30000003 cycles: 31296269 heartbeat IPC: 0.394003 cumulative IPC: 0.208804 (Simulation time: 0 hr 0 min 46 sec) 
-Heartbeat CPU 0 instructions: 40000002 cycles: 71671180 heartbeat IPC: 0.247679 cumulative IPC: 0.233206 (Simulation time: 0 hr 1 min 7 sec) 
-Heartbeat CPU 0 instructions: 50000000 cycles: 114908300 heartbeat IPC: 0.231283 cumulative IPC: 0.232433 (Simulation time: 0 hr 1 min 28 sec) 
-Finished CPU 0 instructions: 25000000 cycles: 107557973 cumulative IPC: 0.232433 (Simulation time: 0 hr 1 min 28 sec) 
+Heartbeat CPU 0 instructions: 30000003 cycles: 31296269 heartbeat IPC: 0.394003 cumulative IPC: 0.208804 (Simulation time: 0 hr 0 min 36 sec) 
+Heartbeat CPU 0 instructions: 40000002 cycles: 71671180 heartbeat IPC: 0.247679 cumulative IPC: 0.233206 (Simulation time: 0 hr 0 min 54 sec) 
+Heartbeat CPU 0 instructions: 50000000 cycles: 114908300 heartbeat IPC: 0.231283 cumulative IPC: 0.232433 (Simulation time: 0 hr 1 min 12 sec) 
+Finished CPU 0 instructions: 25000000 cycles: 107557973 cumulative IPC: 0.232433 (Simulation time: 0 hr 1 min 12 sec) 
 
 ChampSim completed all CPUs
 
