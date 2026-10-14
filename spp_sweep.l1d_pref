@@ -1,0 +1,329 @@
+#include "cache.h"
+#include <cstdlib>
+
+/*
+ * Stride Pattern Prefetcher (SPP), parameterised for design-space sweeps.
+ *
+ * Every tunable is read ONCE from an environment variable SPP_<NAME> in l1d_prefetcher_initialize(),
+ * so a single compiled binary can be reused for the whole sweep. Defaults reproduce the previous
+ * hard-coded configuration. The effective configuration is echoed as one "SPP_CONFIG ..." line in the log.
+ */
+
+// ---- compile-time capacities (upper bounds for runtime parameters, not tunables) ----
+#define MAX_PERIOD_CAP 16
+#define MAX_TRACKERS   1024
+#define MAX_AGGR_CAP   32
+#define PTT_SIZE       256   // direct-mapped; a logging aid, not part of the HW budget
+
+static int env_int(const char* name, int def) {
+    const char* s = getenv(name);
+    return (s && *s) ? atoi(s) : def;
+}
+
+// ---- runtime parameters (defaults == previous hard-coded values) ----
+static int P_TRACKERS     = 24;  // IP tracker table entries
+static int P_IP_BITS      = 8;   // IP tag width (ip & ((1<<bits)-1))
+static int P_MAX_PERIOD   = 12;  // longest period considered (1 = uniform stride only)
+static int P_THR_BASE     = 1;   // confidence needed to trigger period 1
+static int P_THR_SLOPE    = 1;   // extra confidence per extra period: thr(p) = BASE + SLOPE*(p-1)
+static int P_SAT_HEADROOM = 0;   // counter saturates at max_p thr(p) + HEADROOM
+static int P_CONF_DEC     = 0;   // on mismatch: 0 = reset to 0, k>0 = subtract k (saturating at 0)
+static int P_STRIDE_MAX   = 0;   // ignore |stride| > this (0 = no filter)
+static int P_DIST1        = 2;   // period 1: number of pattern steps skipped before the first prefetch
+static int P_DEG1         = 3;   // period 1: base number of prefetches issued
+static int P_DISTN        = 2;   // periods >= 2: steps skipped
+static int P_DEGN         = 3;   // periods >= 2: base number of prefetches
+static int P_THROTTLE     = 1;   // 1 = accuracy-based throttling on, 0 = static aggressiveness
+static int P_AGGR_START   = 0;   // initial (or, without throttling, fixed) extra degree
+static int P_AGGR_MAX     = 8;   // maximum extra degree added by the throttle
+static int P_ACC_HI       = 60;  // epoch accuracy (%) at or above which aggressiveness goes up
+static int P_ACC_LO       = 40;  // epoch accuracy (%) below which aggressiveness goes down
+static int P_EPOCH        = 16;  // feedback samples per epoch
+static int P_THR_SRC      = 0;   // throttle denominator: 0 = pf_same_fill_level, 1 = pf_lower_level
+static int P_MSHR_FRAC8   = 4;   // prefetch fills L1 while MSHR occupancy < SIZE*FRAC8/8, else fills L2
+
+static uint64_t P_IP_MASK = 0xFF;
+static uint8_t  conf_thresh[MAX_PERIOD_CAP];
+static int      sat_max = 12;
+
+int64_t l1_pref_period_trigger[MAX_PERIOD_CAP] = {0}; //no. of times a particular period triggers a prefetch to l1
+int64_t l2_pref_period_trigger[MAX_PERIOD_CAP] = {0}; //no. of times a particular period triggers a prefetch to l2
+
+struct PTT_ENTRY { bool valid=false; uint64_t cl=0; uint8_t period=0; };
+PTT_ENTRY ptt[PTT_SIZE];
+uint64_t useful_by_p[MAX_PERIOD_CAP], dead_by_p[MAX_PERIOD_CAP];
+
+static void ptt_insert(uint64_t cl, uint8_t p) {
+    PTT_ENTRY &e = ptt[cl % PTT_SIZE];
+    if (e.valid && e.cl != cl) dead_by_p[e.period-1]++;  // displaced before any demand touched it
+    e.valid = true; e.cl = cl; e.period = p;
+}
+static void ptt_demand(uint64_t cl) {
+    PTT_ENTRY &e = ptt[cl % PTT_SIZE];
+    if (e.valid && e.cl == cl) { useful_by_p[e.period-1]++; e.valid = false; }
+}
+
+class IP_TRACKER { //one entry in the IP-pattern record table
+    public:
+        uint64_t ip; //ip being tracked
+        uint64_t last_cl_addr; //last accessed cache-line addr
+        int64_t strides[MAX_PERIOD_CAP]; //sliding window of observed strides
+        uint8_t conf[MAX_PERIOD_CAP]; //confidence values associated with candidate period 1 to MAX_PERIOD
+        uint32_t lru; //use LRU to evict old IP trackers
+
+    IP_TRACKER () {
+        ip = 0;
+        last_cl_addr = 0;
+        for (int i = 0; i < MAX_PERIOD_CAP; i++){
+            strides[i] = 0;
+            conf[i] = 0;
+        }
+        lru = 0;
+    };
+};
+
+IP_TRACKER trackers[MAX_TRACKERS];
+
+// ---- accuracy-based throttling state ----
+int aggr_epochs[MAX_AGGR_CAP+1] = {0}; //index i: number of epochs spent in aggr. state i, reporting only
+int pf_aggr = 0;
+uint64_t epochs_total = 0;
+uint64_t ep_useful = 0, ep_issued = 0;
+
+static void load_params() {
+    P_TRACKERS     = env_int("SPP_TRACKERS",     P_TRACKERS);
+    P_IP_BITS      = env_int("SPP_IP_BITS",      P_IP_BITS);
+    P_MAX_PERIOD   = env_int("SPP_MAX_PERIOD",   P_MAX_PERIOD);
+    P_THR_BASE     = env_int("SPP_THR_BASE",     P_THR_BASE);
+    P_THR_SLOPE    = env_int("SPP_THR_SLOPE",    P_THR_SLOPE);
+    P_SAT_HEADROOM = env_int("SPP_SAT_HEADROOM", P_SAT_HEADROOM);
+    P_CONF_DEC     = env_int("SPP_CONF_DEC",     P_CONF_DEC);
+    P_STRIDE_MAX   = env_int("SPP_STRIDE_MAX",   P_STRIDE_MAX);
+    P_DIST1        = env_int("SPP_DIST1",        P_DIST1);
+    P_DEG1         = env_int("SPP_DEG1",         P_DEG1);
+    P_DISTN        = env_int("SPP_DISTN",        P_DISTN);
+    P_DEGN         = env_int("SPP_DEGN",         P_DEGN);
+    P_THROTTLE     = env_int("SPP_THROTTLE",     P_THROTTLE);
+    P_AGGR_START   = env_int("SPP_AGGR_START",   P_AGGR_START);
+    P_AGGR_MAX     = env_int("SPP_AGGR_MAX",     P_AGGR_MAX);
+    P_ACC_HI       = env_int("SPP_ACC_HI",       P_ACC_HI);
+    P_ACC_LO       = env_int("SPP_ACC_LO",       P_ACC_LO);
+    P_EPOCH        = env_int("SPP_EPOCH",        P_EPOCH);
+    P_THR_SRC      = env_int("SPP_THR_SRC",      P_THR_SRC);
+    P_MSHR_FRAC8   = env_int("SPP_MSHR_FRAC8",   P_MSHR_FRAC8);
+
+    // clamp to what the static arrays can hold
+    if (P_TRACKERS < 2) P_TRACKERS = 2;
+    if (P_TRACKERS > MAX_TRACKERS) P_TRACKERS = MAX_TRACKERS;
+    if (P_MAX_PERIOD < 1) P_MAX_PERIOD = 1;
+    if (P_MAX_PERIOD > MAX_PERIOD_CAP) P_MAX_PERIOD = MAX_PERIOD_CAP;
+    if (P_IP_BITS < 1) P_IP_BITS = 1;
+    if (P_IP_BITS > 63) P_IP_BITS = 63;
+    if (P_AGGR_MAX < 0) P_AGGR_MAX = 0;
+    if (P_AGGR_MAX > MAX_AGGR_CAP) P_AGGR_MAX = MAX_AGGR_CAP;
+    if (P_AGGR_START < 0) P_AGGR_START = 0;
+    if (P_AGGR_START > MAX_AGGR_CAP) P_AGGR_START = MAX_AGGR_CAP;
+    if (P_EPOCH < 1) P_EPOCH = 1;
+    if (P_DIST1 < 0) P_DIST1 = 0;
+    if (P_DISTN < 0) P_DISTN = 0;
+
+    P_IP_MASK = (1ULL << P_IP_BITS) - 1;
+
+    int max_thr = 0;
+    for (int p = 1; p <= P_MAX_PERIOD; p++) {
+        int t = P_THR_BASE + P_THR_SLOPE * (p - 1);
+        if (t < 1) t = 1;
+        if (t > 200) t = 200;
+        conf_thresh[p-1] = (uint8_t)t;
+        if (t > max_thr) max_thr = t;
+    }
+    sat_max = max_thr + P_SAT_HEADROOM;
+    if (sat_max > 255) sat_max = 255;
+
+    pf_aggr = P_AGGR_START;
+}
+
+void CACHE::l1d_prefetcher_initialize() 
+{
+    std::cout << "------------------------------------------------" << std::endl;
+    std::cout << "        Stride Pattern Prefetcher (SPP)         " << std::endl;
+    std::cout << "------------------------------------------------" << std::endl;
+    load_params();
+    for (int i = 0; i < P_TRACKERS; i++){
+        trackers[i].lru = i;
+    }
+    std::cout << "SPP_CONFIG TRACKERS=" << P_TRACKERS << " IP_BITS=" << P_IP_BITS << " MAX_PERIOD=" << P_MAX_PERIOD
+              << " THR_BASE=" << P_THR_BASE << " THR_SLOPE=" << P_THR_SLOPE << " SAT_HEADROOM=" << P_SAT_HEADROOM
+              << " CONF_DEC=" << P_CONF_DEC << " STRIDE_MAX=" << P_STRIDE_MAX
+              << " DIST1=" << P_DIST1 << " DEG1=" << P_DEG1 << " DISTN=" << P_DISTN << " DEGN=" << P_DEGN
+              << " THROTTLE=" << P_THROTTLE << " AGGR_START=" << P_AGGR_START << " AGGR_MAX=" << P_AGGR_MAX
+              << " ACC_HI=" << P_ACC_HI << " ACC_LO=" << P_ACC_LO << " EPOCH=" << P_EPOCH
+              << " THR_SRC=" << P_THR_SRC << " MSHR_FRAC8=" << P_MSHR_FRAC8 << std::endl;
+}
+
+static void conf_increment(uint8_t* count){ //handle the increment logic for the confidence counter
+    *count = (*count < sat_max) ? (*count + 1) : sat_max;
+}
+
+static void conf_decrement(uint8_t* count){ //handle the decrement/reset logic for the confidence counter
+    if (P_CONF_DEC <= 0) *count = 0;
+    else *count = (*count < P_CONF_DEC) ? 0 : (*count - P_CONF_DEC);
+}
+
+static void throttle_update(uint64_t useful, uint64_t issued) {
+    /*
+        Called with useful = pf_useful and issued = pf_same_fill_level (THR_SRC=0) or pf_lower_level (THR_SRC=1).
+        Moves the extra-degree level pf_aggr by at most one step per epoch.
+    */
+    if (!P_THROTTLE) return;
+
+    if (issued < ep_issued || useful < ep_useful) { //system counters were reset (end of warmup) - resync
+        ep_issued = issued; ep_useful = useful;
+        return;
+    }
+
+    uint64_t curr_epoch_issued = issued - ep_issued;
+    if (curr_epoch_issued < (uint64_t)P_EPOCH){
+        return;
+    }
+    uint64_t curr_epoch_useful = useful - ep_useful;
+
+    if (curr_epoch_useful * 100 >= curr_epoch_issued * (uint64_t)P_ACC_HI) {
+        if (pf_aggr < P_AGGR_MAX) pf_aggr++;
+    } else if (curr_epoch_useful * 100 < curr_epoch_issued * (uint64_t)P_ACC_LO) {
+        if (pf_aggr > 0) pf_aggr--;
+    }
+    aggr_epochs[pf_aggr]++;
+    epochs_total++;
+    ep_useful = useful;
+    ep_issued = issued;
+}
+
+void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
+{
+    throttle_update(pf_useful, (P_THR_SRC == 0) ? pf_same_fill_level : pf_lower_level);
+    uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE; //cache-line addr, same as IP-stride
+    ip = ip & P_IP_MASK;
+    ptt_demand(cl_addr);
+
+    //below: code only slightly modified  from ip_stride.l1d_pref, exact same logic of LRU eviction when a new IP is to be tracked
+    int index = -1;
+    for (index=0; index<P_TRACKERS; index++) {
+        if (trackers[index].ip == ip)
+            break; //IP already there in table
+    }
+    if (index == P_TRACKERS) { //new IP
+        for (index=0; index<P_TRACKERS; index++) {
+            if (trackers[index].lru == (uint32_t)(P_TRACKERS-1))
+                break;
+        }
+        trackers[index].ip = ip;
+        trackers[index].last_cl_addr = cl_addr;
+        for (int i = 0; i < MAX_PERIOD_CAP; i++){
+            trackers[index].strides[i] = 0;
+            trackers[index].conf[i] = 0;
+        }
+	    for (int i=0; i<P_TRACKERS; i++) {
+            if (trackers[i].lru < trackers[index].lru)
+                trackers[i].lru++;
+        }
+        trackers[index].lru = 0;
+
+        return; //metadata_in;
+    }
+    assert (index != -1);
+    
+    int64_t stride = 0; //calculating difference of two unsigned ints
+    if (cl_addr > trackers[index].last_cl_addr){
+        stride = cl_addr - trackers[index].last_cl_addr;
+    } else {
+        stride = trackers[index].last_cl_addr - cl_addr;
+        stride *= -1;
+    }
+    trackers[index].last_cl_addr = cl_addr;
+
+    for (int i=0; i<P_TRACKERS; i++) { //update LRU, since we are touching this row
+        if (trackers[i].lru < trackers[index].lru)
+            trackers[i].lru++;
+    }
+    trackers[index].lru = 0;
+
+    if (stride == 0){ //0 stride - same line again, not part of the sequence
+        return;
+    }
+    if (P_STRIDE_MAX > 0 && (stride > P_STRIDE_MAX || stride < -P_STRIDE_MAX)){ //very large stride - noise
+        return;
+    }
+
+    for (int period = 1; period <= P_MAX_PERIOD; period++){//look through the possible periods from 1 (uniform) to MAX_PERIOD
+        if (trackers[index].strides[period-1] == stride){ //strides are inserted into the rolling window at 0 index, look at <period> accesses ago
+            conf_increment(trackers[index].conf + period - 1);
+        } else {
+            conf_decrement(trackers[index].conf + period - 1);
+        }
+    }
+
+    //update rolling window - insert from 0, shift right
+    for (int i = P_MAX_PERIOD - 1; i >= 1; i--){
+        trackers[index].strides[i] = trackers[index].strides[i - 1];
+    }
+    trackers[index].strides[0] = stride;
+
+    //prefetch from the smallest period whose confidence reached its threshold
+    for (int period = 1; period <= P_MAX_PERIOD; period++){
+        if (trackers[index].conf[period-1] >= conf_thresh[period-1]){
+            int lo  = (period == 1) ? P_DIST1 : P_DISTN; // pattern steps skipped before the first prefetch
+            int deg = (period == 1) ? P_DEG1  : P_DEGN;
+            int end = lo + deg + pf_aggr;
+
+            int32_t pref_dist = 0;
+            for (int i = 0; i < end; i++) {
+                pref_dist += trackers[index].strides[period - 1 - (i % period)];
+                if (i < lo) continue;
+
+                //the code below is copy-pasted from ip_stride.l1d_pref
+                uint64_t pf_address = (cl_addr + pref_dist) << LOG2_BLOCK_SIZE;
+
+                // only issue a prefetch if the prefetch address is in the same 4 KB page
+                // as the current demand access address
+                if ((pf_address >> LOG2_PAGE_SIZE) != (addr >> LOG2_PAGE_SIZE))
+                    break;
+                
+                if (get_way(pf_address >> LOG2_BLOCK_SIZE, get_set(pf_address >> LOG2_BLOCK_SIZE)) < NUM_WAY){
+                    continue;
+                }
+                // check the MSHR occupancy to decide if we're going to prefetch to the L1 or L2
+                if ((int)MSHR.occupancy * 8 < (int)MSHR.SIZE * P_MSHR_FRAC8){
+                    l1_pref_period_trigger[period-1]++;
+                    prefetch_line(ip, addr, pf_address, FILL_L1, 0);
+                    ptt_insert(pf_address >> LOG2_BLOCK_SIZE, period);
+                } else{
+                    l2_pref_period_trigger[period-1]++;
+                    prefetch_line(ip, addr, pf_address, FILL_L2, 0);
+                    ptt_insert(pf_address >> LOG2_BLOCK_SIZE, period);
+                }
+            }
+            break; 
+        }
+    }
+}
+
+void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t v_evicted_addr, uint64_t evicted_addr, uint32_t metadata_in)
+{
+	return; //metadata_in;
+}
+
+void CACHE::l1d_prefetcher_final_stats()
+{
+    // NOTE: these SPP-side counters are not reset at the end of warmup (ChampSim's own counters are).
+    for (int period = 1; period <= P_MAX_PERIOD; period++){
+        std::cout << "Prefetches triggered by period " << period << " to L1: " << l1_pref_period_trigger[period-1] << " | to L2: " << l2_pref_period_trigger[period-1] << " | total: " 
+            << (l1_pref_period_trigger[period-1] + l2_pref_period_trigger[period-1]) << " | Useful: " << useful_by_p[period-1] << " | Useless: " 
+            << dead_by_p[period-1] << std::endl;
+    }
+    for (int aggr = 0; aggr <= MAX_AGGR_CAP; aggr++){
+        if (aggr_epochs[aggr])
+            std::cout << "Epochs at aggression " << aggr << ": " << aggr_epochs[aggr] << std::endl;
+    }
+    std::cout << "Throttle final aggression: " << pf_aggr << " | epochs: " << epochs_total << std::endl;
+}

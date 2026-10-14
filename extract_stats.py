@@ -106,11 +106,14 @@ for config in CONFIGS:
 for trace in TRACES:
 
     baseline = results.get(("baseline", trace))
+    ipstride = results.get(("ipstride", trace))
 
     if baseline is None:
         continue
 
     baseline_misses = baseline["l1d_load_miss"]
+    baseline_ipc = baseline["ipc"]
+    ipstride_ipc = ipstride["ipc"]
 
     for config in CONFIGS:
 
@@ -128,13 +131,14 @@ for trace in TRACES:
             and result["l1d_load_miss"] is not None
             and baseline_misses != 0
         ):
-            result["l1d_coverage"] = (
-                (baseline_misses - result["l1d_load_miss"])
-                / baseline_misses
-            )
+            result["l1d_coverage"] = (baseline_misses - result["l1d_load_miss"]) / baseline_misses
+            result["baseline_speedup"] = result["ipc"] - baseline_ipc
+            result["ipstride_speedup"] = None
 
         else:
             result["l1d_coverage"] = None
+        result["baseline_speedup"] = result["ipc"]/baseline_ipc
+        result["ipstride_speedup"] = result["ipc"]/ipstride_ipc
 
 
 # ================================================================
@@ -146,10 +150,12 @@ print("=" * 95)
 print(
     f"{'Configuration':<12}"
     f"{'Trace':<10}"
-    f"{'IPC':>10}"
+    f"{'IPC':>8}"
+    f"{'Speedup':>10}"
+    # f"{'Speedup on IP-stride':>10}"
     f"{'L1D MPKI':>12}"
-    f"{'L1D Pref Acc (%)':>16}"
-    f"{'L1D Coverage (%)':>16}"
+    f"{'L1D Pref Acc (%)':>20}"
+    f"{'L1D Coverage (%)':>20}"
 )
 print("=" * 95)
 
@@ -169,6 +175,8 @@ for trace in TRACES:
             f"{config:<12}"
             f"{trace:<10}"
             f"{fmt(result['ipc'], 4):>10}"
+            f"{fmt(result['baseline_speedup'], 4):>10}"
+            # f"{fmt(result['ipstride_speedup'], 4):>10}"
             f"{fmt(result['l1d_mpki'], 4):>12}"
             f"{fmt(result['l1d_prefetch_accuracy'], 4):>16}"
             f"{fmt(None if result['l1d_coverage'] is None else result['l1d_coverage'] * 100, 4):>16}"

@@ -1,5 +1,5 @@
 #include "cache.h"
-#define MAX_PERIOD 5
+#define MAX_PERIOD 12
 #define IP_TRACKER_COUNT 24 //why?
 #define PREFETCH_DEGREE 3
 #define MASK_IP 0xFF
@@ -8,19 +8,37 @@
 #define SAT_CNT_MAX MAX_PERIOD
 #define SAT_DECREMENT 3
 #define PREFETCH_DEGREE 3
+#define PTT_SIZE 256 //for debugging and logging, not HW
 
-const uint8_t PREF_CONF_THRESH[MAX_PERIOD] = {1, 2, 3, 5, 5};
+const uint8_t PREF_CONF_THRESH[MAX_PERIOD] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+
+int64_t l1_pref_period_trigger[MAX_PERIOD] = {0}; //no. of times a particular period triggers a prefetch to l1
+int64_t l2_pref_period_trigger[MAX_PERIOD] = {0}; //no. of times a particular period triggers a prefetch to l2
+
+struct PTT_ENTRY { bool valid=false; uint64_t cl=0; uint8_t period=0; };
+PTT_ENTRY ptt[PTT_SIZE];
+uint64_t useful_by_p[MAX_PERIOD], dead_by_p[MAX_PERIOD];
+
+static void ptt_insert(uint64_t cl, uint8_t p) {
+    PTT_ENTRY &e = ptt[cl % PTT_SIZE];
+    if (e.valid && e.cl != cl) dead_by_p[e.period-1]++;  // displaced before any demand touched it
+    e.valid = true; e.cl = cl; e.period = p;
+}
+static void ptt_demand(uint64_t cl) {
+    PTT_ENTRY &e = ptt[cl % PTT_SIZE];
+    if (e.valid && e.cl == cl) { useful_by_p[e.period-1]++; e.valid = false; }
+}
 
 class IP_TRACKER { //one entry in the IP-pattern record table
-  public:
-    uint64_t ip; //ip being tracked
-    uint64_t last_cl_addr; //last accessed cache-line addr?
-    // bool uniform; //is the access pattern uniform/constant-stride?
-    
-    int64_t strides[MAX_PERIOD]; //sliding window of observed strides
-    uint8_t conf[MAX_PERIOD]; //confidence values associated with candidate period 1 to MAX_PERIOD
+    public:
+        uint64_t ip; //ip being tracked
+        uint64_t last_cl_addr; //last accessed cache-line addr?
+        // bool uniform; //is the access pattern uniform/constant-stride?
 
-    uint32_t lru; //use LRU to evict old IP trackers
+        int64_t strides[MAX_PERIOD]; //sliding window of observed strides
+        uint8_t conf[MAX_PERIOD]; //confidence values associated with candidate period 1 to MAX_PERIOD
+
+        uint32_t lru; //use LRU to evict old IP trackers
 
     IP_TRACKER () {
         ip = 0;
@@ -30,11 +48,6 @@ class IP_TRACKER { //one entry in the IP-pattern record table
             conf[i] = 0;
         }
         lru = 0;
-        // seq_length = 0;
-        // last_stride_idx = 0;
-
-        // uniform = true; //default assumption
-
     };
 };
 
@@ -54,17 +67,67 @@ void conf_increment(uint8_t* count){ //handle the increment logic for the confid
     *count = (*count < SAT_CNT_MAX) ? (*count + 1) : (SAT_CNT_MAX);
 }
 
-void conf_decr(uint8_t* count){ //handle the decrement/reset logic for the confidence counter
-    // *count = 0; //or a decrement by a larger qty?
-    *count = (*count < SAT_DECREMENT)?(0):(*count - SAT_DECREMENT);
+void conf_decrement(uint8_t* count){ //handle the decrement/reset logic for the confidence counter
+    *count = 0; //or a decrement by a larger qty?
+    // *count = (*count < SAT_DECREMENT)?(0):(*count - SAT_DECREMENT);
+}
+
+
+//accuracy-based throttling
+#define BASE_AGGR 0
+#define MAX_AGGR 16
+#define ACC_HI_PCT 60
+#define ACC_LO_PCT 40
+#define EPOCH_SAMPLES 16 //window of lines prefetched into L1 from L2, to consider for accuracy-based throttling
+
+// Sweep winner (config 950f30e9): identical to the previous defaults except period 1 skips no steps (distance 0).
+// Distance = number of pattern steps skipped before the first prefetch; index 0 is period 1, indices 1.. are periods >= 2.
+uint8_t PREF_DIST[MAX_PERIOD] = {0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2}; //lower bound on distance to prefetched addresses
+uint8_t PREF_DEGREE[MAX_PERIOD] = {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3}; //(base) number of prefetches to be issued
+
+
+int aggr_epochs[MAX_AGGR+1] = {0}; //index i: number of epochs spent in aggr. state i, used for reporting stats only
+
+uint8_t pfs_issued;
+uint8_t pf_aggr = BASE_AGGR;
+uint64_t epochs_total = 0;
+uint64_t ep_useful = 0, ep_issued = 0;
+
+static void throttle_update(uint64_t useful, uint64_t issued) {
+    /*
+        Will be called with useful = pf_useful from champsim's counters, issued=pf_same_fill_level
+        Will update the aggressiveness of the prefetcher overall, which affects the prefetch degree (not distance)
+    */
+    if (issued < ep_issued || useful < ep_useful) { //system counters were reset - then reset this too
+        ep_issued = issued; ep_useful = useful;
+        return;
+    }
+
+    uint64_t curr_epoch_issued = issued - ep_issued;
+    if (curr_epoch_issued < EPOCH_SAMPLES){
+        return;
+    }
+    uint64_t curr_epoch_useful = useful - ep_useful;
+
+    if (curr_epoch_useful * 100 >= curr_epoch_issued * ACC_HI_PCT) {
+        if (pf_aggr < MAX_AGGR) pf_aggr++;
+    } else if (curr_epoch_useful * 100 < curr_epoch_issued * ACC_LO_PCT) {
+        if (pf_aggr > 0) pf_aggr--;
+    }
+    aggr_epochs[pf_aggr]++;
+    epochs_total++;
+    ep_useful = useful;
+    ep_issued = issued;
 }
 
 void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
 {
-   uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE; //cache-line addr, same as IP-stride
-   ip = ip & MASK_IP;
+    throttle_update(pf_useful, pf_same_fill_level);
+    uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE; //cache-line addr, same as IP-stride
+    ip = ip & MASK_IP;
+    ptt_demand(cl_addr);
 
-   //below: code only slightly modified  from ip_stride.l1d_pref, exact same logic of LRU eviction when a new IP is to be tracked
+    //below: code only slightly modified  from ip_stride.l1d_pref, exact same logic of LRU eviction when a new IP is to be tracked
     int index = -1;
     for (index=0; index<IP_TRACKER_COUNT; index++) {
         if (trackers[index].ip == ip)
@@ -117,7 +180,7 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
         if (trackers[index].strides[period-1] == stride){ //strides are inserted into the rolling window at 0 index, look at <period> accesses ago
             conf_increment(trackers[index].conf + period - 1); //increment match counter corresponding to period (index = period-1), since we have a 'match' to this candidate period
         } else {
-            conf_decr(trackers[index].conf + period - 1);
+            conf_decrement(trackers[index].conf + period - 1);
         }
     }
 
@@ -132,10 +195,13 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
         if (trackers[index].conf[period-1] >= PREF_CONF_THRESH[period-1]){
             //prefetch this one: priority to smaller period: 
             //multiple of the smaller period would also be positive when the smaller period is happening
-            int32_t pref_dist = 0; //initially
-            for (int i=0; i<PREFETCH_DEGREE; i++) {
-                // pref_dist += trackers[index].strides[MAX_PERIOD - 1 - ((MAX_PERIOD + i)%period)];
+            int lo  = PREF_DIST[period-1];
+            int end = lo + PREF_DEGREE[period-1] + pf_aggr;
+
+            int32_t pref_dist = 0;
+            for (int i = 0; i < end; i++) {
                 pref_dist += trackers[index].strides[period - 1 - (i % period)];
+                if (i < lo) continue;
 
                 //the code below is copy-pasted from ip_stride.l1d_pref
                 uint64_t pf_address = (cl_addr + pref_dist) << LOG2_BLOCK_SIZE;
@@ -144,18 +210,24 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
                 // as the current demand access address
                 if ((pf_address >> LOG2_PAGE_SIZE) != (addr >> LOG2_PAGE_SIZE))
                     break;
-
+                
+                if (get_way(pf_address >> LOG2_BLOCK_SIZE, get_set(pf_address >> LOG2_BLOCK_SIZE)) < NUM_WAY){
+                    continue;
+                }
                 // check the MSHR occupancy to decide if we're going to prefetch to the L1 or L2
-                if (MSHR.occupancy < (MSHR.SIZE>>1))
+                if (MSHR.occupancy < (MSHR.SIZE>>1)){
+                    l1_pref_period_trigger[period-1]++;
                     prefetch_line(ip, addr, pf_address, FILL_L1, 0);
-                else
+                    ptt_insert(pf_address >> LOG2_BLOCK_SIZE, period);
+                } else{
+                    l2_pref_period_trigger[period-1]++;
                     prefetch_line(ip, addr, pf_address, FILL_L2, 0);
+                    ptt_insert(pf_address >> LOG2_BLOCK_SIZE, period);
+                }
             }
             break; 
         }
     }
-
-
 }
 
 void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t v_evicted_addr, uint64_t evicted_addr, uint32_t metadata_in)
@@ -165,5 +237,12 @@ void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t s
 
 void CACHE::l1d_prefetcher_final_stats()
 {
-
+    for (int period = 1; period <= MAX_PERIOD; period++){
+        std::cout << "Prefetches triggered by period " << period << " to L1: " << l1_pref_period_trigger[period-1] << " | to L2: " << l2_pref_period_trigger[period-1] << " | total: " 
+            << (l1_pref_period_trigger[period-1] + l2_pref_period_trigger[period-1]) << " | Useful: " << useful_by_p[period-1] << " | Useless: " 
+            << dead_by_p[period-1] << std::endl;
+    }
+    for (int aggr = 0; aggr <= MAX_AGGR; aggr++){
+        std::cout << " Epochs at aggression " << aggr << ": " << aggr_epochs[aggr] << " | ";
+    }
 }
