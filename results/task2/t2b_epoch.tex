@@ -1,0 +1,40 @@
+\begin{table}[H]\centering\small
+\ifdefined\fitbx\else\newsavebox{\fitbx}\fi
+\sbox{\fitbx}{\begin{tabular}{llrrrrrrrr}\toprule
+Trace & Configuration & IPC & Speedup & vs RRIP & L2C load MPKI & L2 instr. MPKI & L2 data MPKI & I-RRIP epochs (\%) & ratio avg (\%) \\ \midrule
+Trace 1 & SRRIP & 0.2322 & 0.9995 & 1.0000 & 17.639 & 10.562 & 7.077 & -- & -- \\
+Trace 1 & I-RRIP (chosen: c2d3p2e1w0) & 0.2336 & 1.0055 & 1.0060 & 18.617 & 8.923 & 9.694 & -- & -- \\
+Trace 1 & epoch 256 & 0.2337 & 1.0059 & 1.0064 & 18.614 & 8.937 & 9.678 & 100.0 & 48.3 \\
+Trace 1 & epoch 1024 (default) & 0.2337 & 1.0058 & 1.0063 & 18.628 & 8.950 & 9.678 & 100.0 & 47.4 \\
+Trace 1 & epoch 2048 & 0.2337 & 1.0059 & 1.0064 & 18.627 & 8.947 & 9.680 & 100.0 & 47.5 \\
+Trace 1 & epoch 4096 & 0.2335 & 1.0049 & 1.0054 & 18.628 & 8.944 & 9.684 & 100.0 & 46.5 \\
+Trace 1 & epoch 6144 & 0.2333 & 1.0039 & 1.0044 & 18.619 & 9.164 & 9.455 & 100.0 & 45.6 \\
+\midrule
+Trace 2 & SRRIP & 0.2518 & 1.0026 & 1.0000 & 25.746 & 17.781 & 7.965 & -- & -- \\
+Trace 2 & I-RRIP (chosen: c2d3p2e1w0) & 0.2636 & 1.0495 & 1.0468 & 19.149 & 7.985 & 11.164 & -- & -- \\
+Trace 2 & epoch 256 & 0.2615 & 1.0414 & 1.0387 & 19.382 & 8.481 & 10.901 & 96.2 & 59.2 \\
+Trace 2 & epoch 1024 (default) & 0.2633 & 1.0482 & 1.0455 & 19.135 & 8.036 & 11.099 & 100.0 & 57.0 \\
+Trace 2 & epoch 2048 & 0.2634 & 1.0489 & 1.0462 & 19.147 & 8.003 & 11.144 & 100.0 & 54.4 \\
+Trace 2 & epoch 4096 & 0.2634 & 1.0489 & 1.0462 & 19.118 & 7.991 & 11.126 & 100.0 & 49.9 \\
+Trace 2 & epoch 6144 & 0.2634 & 1.0486 & 1.0459 & 19.094 & 8.007 & 11.087 & 100.0 & 53.0 \\
+\midrule
+Trace 3 & SRRIP & 0.3817 & 0.9991 & 1.0000 & 4.039 & 1.197 & 2.842 & -- & -- \\
+Trace 3 & I-RRIP (chosen: c2d3p2e1w0) & 0.3849 & 1.0075 & 1.0084 & 3.842 & 0.660 & 3.182 & -- & -- \\
+Trace 3 & epoch 256 & 0.3822 & 1.0002 & 1.0011 & 3.979 & 0.910 & 3.069 & 57.1 & 34.3 \\
+Trace 3 & epoch 1024 (default) & 0.3850 & 1.0076 & 1.0085 & 3.841 & 0.661 & 3.180 & 100.0 & 41.5 \\
+Trace 3 & epoch 2048 & 0.3850 & 1.0077 & 1.0086 & 3.835 & 0.659 & 3.176 & 100.0 & 39.2 \\
+Trace 3 & epoch 4096 & 0.3850 & 1.0076 & 1.0084 & 3.844 & 0.664 & 3.181 & 0.0 & -- \\
+Trace 3 & epoch 6144 & 0.3822 & 1.0004 & 1.0013 & 4.008 & 1.071 & 2.937 & 100.0 & 38.7 \\
+\midrule
+Geomean & SRRIP & 0.2816 & 1.0004 & 1.0000 & 12.241 & 6.080 & 5.431 & -- & -- \\
+Geomean & I-RRIP (chosen: c2d3p2e1w0) & 0.2873 & 1.0206 & 1.0202 & 11.106 & 3.610 & 7.010 & -- & -- \\
+Geomean & epoch 256 & 0.2859 & 1.0157 & 1.0153 & 11.280 & 4.101 & 6.866 & -- & -- \\
+Geomean & epoch 1024 (default) & 0.2872 & 1.0204 & 1.0199 & 11.104 & 3.622 & 6.991 & -- & -- \\
+Geomean & epoch 2048 & 0.2873 & 1.0207 & 1.0203 & 11.101 & 3.614 & 6.997 & -- & -- \\
+Geomean & epoch 4096 & 0.2871 & 1.0202 & 1.0198 & 11.104 & 3.620 & 6.998 & -- & -- \\
+Geomean & epoch 6144 & 0.2864 & 1.0174 & 1.0170 & 11.253 & 4.283 & 6.753 & -- & -- \\
+\bottomrule
+\end{tabular}}
+\ifdim\wd\fitbx>\linewidth\resizebox{\linewidth}{!}{\usebox{\fitbx}}\else\usebox{\fitbx}\fi
+\caption{Task 2B sensitivity to the epoch length (SRRIP and I-RRIP shown for reference).}\label{tab:t2b_epoch}
+\end{table}

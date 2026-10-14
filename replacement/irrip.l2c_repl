@@ -5,8 +5,8 @@ todo: instr conscious rrip for l2
 keep instr lines longer than data lines. reference policy: rrip given in rrip.l2c_repl
 
 final policy (after testing multiple ones):
-insertion: same as srrip (inserted at rrpv 2)
-promotion: promote code lines to rrpv 0 and data lines to rrpv 1
+insertion: insert code lines at rrpv 2 and data lines at rrpv 3
+promotion: promote code lines to rrpv 0 and data lines to rrpv 2
 eviction: at rrpv 3, evict data lines first. if none at rrpv 3, increase rrpv by 1 for everyone
 
 writeback hits: an L1D writeback that hits in the L2 is not an access by the program because
@@ -21,9 +21,9 @@ uint32_t l2_rrpv[L2C_SET][L2C_WAY];
 
 // flags for easier testing
 static uint32_t INS_INSTR = maxRRPV - 1; // insertion rrpv of a code line
-static uint32_t INS_DATA  = maxRRPV - 1; // insertion rrpv of a data line
+static uint32_t INS_DATA  = maxRRPV; // insertion rrpv of a data line
 static const uint32_t PRO_INSTR = 0; // promotion rrpv of code line (fixed)
-static uint32_t PRO_DATA  = 1; // promotion rrpv of data line
+static uint32_t PRO_DATA  = 2; // promotion rrpv of data line
 
 // if 1, promote data line normally on writeback, if 0, ignore writeback
 static uint32_t WB_PROMOTE = 0; 
@@ -45,6 +45,7 @@ void CACHE::l2c_initialize_replacement()
     PRO_DATA         = env_knob("IRRIP_PRO_DATA", PRO_DATA);
     DATA_EVICT       = env_knob("DATA_EVICT", DATA_EVICT);
     WB_PROMOTE       = env_knob("IRRIP_WB_PROMOTE", WB_PROMOTE);
+    INS_DATA         = env_knob("IRRIP_INS_DATA", INS_DATA);
 
     std::cout << "==================================" << std::endl;
     std::cout << "Initializing IRRIP L2C replacement" << std::endl;

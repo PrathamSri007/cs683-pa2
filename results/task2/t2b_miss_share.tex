@@ -1,0 +1,32 @@
+\begin{table}[H]\centering\small
+\ifdefined\fitbx\else\newsavebox{\fitbx}\fi
+\sbox{\fitbx}{\begin{tabular}{llrrrrrrrr}\toprule
+Trace & Configuration & IPC & Speedup & vs RRIP & L2C load MPKI & L2 instr. MPKI & L2 data MPKI & I-RRIP epochs (\%) & switches \\ \midrule
+Trace 1 & Baseline (LRU) & 0.2323 & 1.0000 & 1.0005 & 17.696 & 10.338 & 7.358 & -- & -- \\
+Trace 1 & SRRIP & 0.2322 & 0.9995 & 1.0000 & 17.639 & 10.562 & 7.077 & -- & -- \\
+Trace 1 & I-RRIP (chosen: c2d3p2e1w0) & 0.2336 & 1.0055 & 1.0060 & 18.617 & 8.923 & 9.694 & -- & -- \\
+Trace 1 & Dynamic I-RRIP (default) & 0.2337 & 1.0058 & 1.0063 & 18.628 & 8.950 & 9.678 & 100.0 & 0 \\
+Trace 1 & Miss share mode (threshold 50\%) & 0.2322 & 0.9995 & 1.0000 & 17.639 & 10.562 & 7.077 & 0.0 & 0 \\
+\midrule
+Trace 2 & Baseline (LRU) & 0.2512 & 1.0000 & 0.9974 & 27.357 & 18.853 & 8.504 & -- & -- \\
+Trace 2 & SRRIP & 0.2518 & 1.0026 & 1.0000 & 25.746 & 17.781 & 7.965 & -- & -- \\
+Trace 2 & I-RRIP (chosen: c2d3p2e1w0) & 0.2636 & 1.0495 & 1.0468 & 19.149 & 7.985 & 11.164 & -- & -- \\
+Trace 2 & Dynamic I-RRIP (default) & 0.2633 & 1.0482 & 1.0455 & 19.135 & 8.036 & 11.099 & 100.0 & 0 \\
+Trace 2 & Miss share mode (threshold 50\%) & 0.2592 & 1.0318 & 1.0292 & 21.046 & 10.994 & 10.052 & 76.9 & 1 \\
+\midrule
+Trace 3 & Baseline (LRU) & 0.3821 & 1.0000 & 1.0009 & 3.954 & 1.124 & 2.830 & -- & -- \\
+Trace 3 & SRRIP & 0.3817 & 0.9991 & 1.0000 & 4.039 & 1.197 & 2.842 & -- & -- \\
+Trace 3 & I-RRIP (chosen: c2d3p2e1w0) & 0.3849 & 1.0075 & 1.0084 & 3.842 & 0.660 & 3.182 & -- & -- \\
+Trace 3 & Dynamic I-RRIP (default) & 0.3850 & 1.0076 & 1.0085 & 3.841 & 0.661 & 3.180 & 100.0 & 0 \\
+Trace 3 & Miss share mode (threshold 50\%) & 0.3817 & 0.9991 & 1.0000 & 4.039 & 1.197 & 2.842 & 0.0 & 0 \\
+\midrule
+Geomean & Baseline (LRU) & 0.2815 & 1.0000 & 0.9996 & 12.416 & 6.028 & 5.616 & -- & -- \\
+Geomean & SRRIP & 0.2816 & 1.0004 & 1.0000 & 12.241 & 6.080 & 5.431 & -- & -- \\
+Geomean & I-RRIP (chosen: c2d3p2e1w0) & 0.2873 & 1.0206 & 1.0202 & 11.106 & 3.610 & 7.010 & -- & -- \\
+Geomean & Dynamic I-RRIP (default) & 0.2872 & 1.0204 & 1.0199 & 11.104 & 3.622 & 6.991 & -- & -- \\
+Geomean & Miss share mode (threshold 50\%) & 0.2843 & 1.0100 & 1.0096 & 11.446 & 5.180 & 5.869 & -- & -- \\
+\bottomrule
+\end{tabular}}
+\ifdim\wd\fitbx>\linewidth\resizebox{\linewidth}{!}{\usebox{\fitbx}}\else\usebox{\fitbx}\fi
+\caption{Task 2B: Alternative Miss-share mode compared against default hint.}\label{tab:t2b_share}
+\end{table}

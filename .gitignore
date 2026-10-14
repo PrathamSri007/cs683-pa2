@@ -2,5 +2,4 @@ Trace*
 *vscode*
 bin/*
 obj/*
-scripts/
-results/list_names.sh
+traces/

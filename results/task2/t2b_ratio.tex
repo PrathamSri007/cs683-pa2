@@ -1,0 +1,16 @@
+\begin{table}[H]\centering\small
+\ifdefined\fitbx\else\newsavebox{\fitbx}\fi
+\sbox{\fitbx}{\begin{tabular}{llrrrrr}\toprule
+Trace & Configuration & I-RRIP epochs (\%) & switches & ratio min (\%) & ratio avg (\%) & ratio max (\%) \\ \midrule
+Trace 1 & Dynamic I-RRIP (default) & 100.0 & 0 & 45.5 & 47.4 & 48.8 \\
+\midrule
+Trace 2 & Dynamic I-RRIP (default) & 100.0 & 0 & 28.5 & 57.0 & 63.8 \\
+\midrule
+Trace 3 & Dynamic I-RRIP (default) & 100.0 & 0 & 36.2 & 41.5 & 46.9 \\
+\midrule
+Geomean & Dynamic I-RRIP (default) & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}}
+\ifdim\wd\fitbx>\linewidth\resizebox{\linewidth}{!}{\usebox{\fitbx}}\else\usebox{\fitbx}\fi
+\caption{Task 2B: instruction-share ratio parameters.}\label{tab:t2b_ratio}
+\end{table}

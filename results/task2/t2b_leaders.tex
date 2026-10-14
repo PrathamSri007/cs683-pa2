@@ -1,0 +1,40 @@
+\begin{table}[H]\centering\small
+\ifdefined\fitbx\else\newsavebox{\fitbx}\fi
+\sbox{\fitbx}{\begin{tabular}{llrrrrrrrr}\toprule
+Trace & Configuration & IPC & Speedup & vs RRIP & L2C load MPKI & L2 instr. MPKI & L2 data MPKI & I-RRIP epochs (\%) & ratio avg (\%) \\ \midrule
+Trace 1 & SRRIP & 0.2322 & 0.9995 & 1.0000 & 17.639 & 10.562 & 7.077 & -- & -- \\
+Trace 1 & I-RRIP (chosen: c2d3p2e1w0) & 0.2336 & 1.0055 & 1.0060 & 18.617 & 8.923 & 9.694 & -- & -- \\
+Trace 1 & 8 leader sets (default) & 0.2337 & 1.0058 & 1.0063 & 18.628 & 8.950 & 9.678 & 100.0 & 47.4 \\
+Trace 1 & 16 leader sets & 0.2336 & 1.0052 & 1.0057 & 18.590 & 8.947 & 9.643 & 100.0 & 44.8 \\
+Trace 1 & 32 leader sets & 0.2337 & 1.0058 & 1.0063 & 18.589 & 8.978 & 9.611 & 100.0 & 44.0 \\
+Trace 1 & 64 leader sets & 0.2337 & 1.0057 & 1.0062 & 18.552 & 9.022 & 9.529 & 100.0 & 43.1 \\
+Trace 1 & 128 leader sets & 0.2334 & 1.0046 & 1.0051 & 18.506 & 9.132 & 9.374 & 100.0 & 42.7 \\
+\midrule
+Trace 2 & SRRIP & 0.2518 & 1.0026 & 1.0000 & 25.746 & 17.781 & 7.965 & -- & -- \\
+Trace 2 & I-RRIP (chosen: c2d3p2e1w0) & 0.2636 & 1.0495 & 1.0468 & 19.149 & 7.985 & 11.164 & -- & -- \\
+Trace 2 & 8 leader sets (default) & 0.2633 & 1.0482 & 1.0455 & 19.135 & 8.036 & 11.099 & 100.0 & 57.0 \\
+Trace 2 & 16 leader sets & 0.2619 & 1.0427 & 1.0400 & 19.472 & 8.597 & 10.875 & 96.0 & 59.5 \\
+Trace 2 & 32 leader sets & 0.2612 & 1.0399 & 1.0373 & 19.621 & 8.800 & 10.821 & 93.5 & 60.0 \\
+Trace 2 & 64 leader sets & 0.2610 & 1.0392 & 1.0366 & 19.708 & 8.943 & 10.764 & 94.8 & 60.2 \\
+Trace 2 & 128 leader sets & 0.2603 & 1.0365 & 1.0338 & 20.047 & 9.516 & 10.531 & 94.9 & 61.4 \\
+\midrule
+Trace 3 & SRRIP & 0.3817 & 0.9991 & 1.0000 & 4.039 & 1.197 & 2.842 & -- & -- \\
+Trace 3 & I-RRIP (chosen: c2d3p2e1w0) & 0.3849 & 1.0075 & 1.0084 & 3.842 & 0.660 & 3.182 & -- & -- \\
+Trace 3 & 8 leader sets (default) & 0.3850 & 1.0076 & 1.0085 & 3.841 & 0.661 & 3.180 & 100.0 & 41.5 \\
+Trace 3 & 16 leader sets & 0.3825 & 1.0010 & 1.0019 & 3.965 & 0.885 & 3.080 & 50.0 & 33.4 \\
+Trace 3 & 32 leader sets & 0.3821 & 1.0001 & 1.0010 & 3.984 & 0.923 & 3.062 & 50.0 & 31.2 \\
+Trace 3 & 64 leader sets & 0.3819 & 0.9996 & 1.0004 & 3.994 & 0.979 & 3.015 & 38.5 & 29.3 \\
+Trace 3 & 128 leader sets & 0.3820 & 0.9999 & 1.0007 & 4.031 & 1.054 & 2.977 & 37.0 & 24.6 \\
+\midrule
+Geomean & SRRIP & 0.2816 & 1.0004 & 1.0000 & 12.241 & 6.080 & 5.431 & -- & -- \\
+Geomean & I-RRIP (chosen: c2d3p2e1w0) & 0.2873 & 1.0206 & 1.0202 & 11.106 & 3.610 & 7.010 & -- & -- \\
+Geomean & 8 leader sets (default) & 0.2872 & 1.0204 & 1.0199 & 11.104 & 3.622 & 6.991 & -- & -- \\
+Geomean & 16 leader sets & 0.2860 & 1.0162 & 1.0157 & 11.280 & 4.083 & 6.861 & -- & -- \\
+Geomean & 32 leader sets & 0.2857 & 1.0151 & 1.0147 & 11.327 & 4.177 & 6.829 & -- & -- \\
+Geomean & 64 leader sets & 0.2856 & 1.0147 & 1.0143 & 11.345 & 4.291 & 6.763 & -- & -- \\
+Geomean & 128 leader sets & 0.2853 & 1.0135 & 1.0131 & 11.435 & 4.507 & 6.648 & -- & -- \\
+\bottomrule
+\end{tabular}}
+\ifdim\wd\fitbx>\linewidth\resizebox{\linewidth}{!}{\usebox{\fitbx}}\else\usebox{\fitbx}\fi
+\caption{Task 2B sensitivity to the leader-set count (SRRIP and I-RRIP shown for reference).}\label{tab:t2b_leaders}
+\end{table}

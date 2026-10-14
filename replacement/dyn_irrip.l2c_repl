@@ -41,7 +41,8 @@ uint32_t l2_rrpv[L2C_SET][L2C_WAY];
 
 // irrip rules:
 #define IRRIP_INS_INSTR 2
-#define IRRIP_PRO_DATA 1
+#define IRRIP_INS_DATA 3
+#define IRRIP_PRO_DATA 2
 #define IRRIP_WB_PROMOTE 0
 #define IRRIP_DATA_EVICT 1
 // rrip rules
@@ -53,7 +54,7 @@ uint32_t l2_rrpv[L2C_SET][L2C_WAY];
 
 // decision parameters
 static uint32_t THRESH_PCT = 25;
-static uint32_t LEADER_LOG2 = 5;
+static uint32_t LEADER_LOG2 = 7;
 static uint32_t EPOCH = 1024;
 static uint32_t HYST_PCT = 0;
 static uint32_t MODE = 0;
@@ -143,7 +144,6 @@ uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, c
 
     // WE SHOULD NOT REACH HERE
     assert(0);
-    return 0;
     return 0;
 }
 
@@ -248,7 +248,7 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t wa
             if (type != WRITEBACK || IRRIP_WB_PROMOTE)
                 l2_rrpv[set][way] = is_code ? 0 : IRRIP_PRO_DATA;
         } else
-            l2_rrpv[set][way] = is_code ? IRRIP_INS_INSTR : RRIP_INS; // insertion
+            l2_rrpv[set][way] = is_code ? IRRIP_INS_INSTR : IRRIP_INS_DATA; // insertion
     } else {
         l2_rrpv[set][way] = hit ? RRIP_PRO : RRIP_INS;
     }
