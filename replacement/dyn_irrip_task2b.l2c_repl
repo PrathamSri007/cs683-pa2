@@ -1,0 +1,285 @@
+#include "cache.h"
+
+/*
+todo: keep some sample leader sets which decide policy for all other sets
+
+we primarily use the formula given as hint in the problem statement
+32/1024 leader sets run rrip policy and report instruction/data workload
+leader sets calculate and update ratio (given hint formula)
+ratio > THRESH -> follower sets use irrip, otherwise use rrip
+(instr_acc + instr_miss) * 100 > (tot_acc + tot_miss) * THRESH_PCT
+
+all 4 counters given above are halved every epoch (1024 cache events) so that
+previous cache events have lesser weight
+
+some more refinements tried and tested:
+-   Hysteresis (DYN_IRRIP_HYST_PCT = h): switch rrip -> irrip only if ratio > T + h and
+    irrip -> rrip only if ratio <= T - h, so a ratio that hovers near T does not make the
+    followers flip every epoch.
+
+-   Miss-share formula (DYN_IRRIP_MODE=1): ratio = instr_miss / tot_miss, i.e. the share of
+    the L2 misses are code misses. Hits do not count, so a code-heavy but mostly L2 occupying
+    workload does not trigger irrip.
+
+-   True set dueling (DYN_IRRIP_MODE=2): A second, disjoint group of leader sets always uses irrip 
+    (set-index bits [2k-1:k] == NOT bits [k-1:0]), separate from rrip leaders. A 10-bit saturating 
+    counter PSEL (saturates at 1023) starts at 512 and tracks weighted misses: rrip leader misses 
+    add w, irrip leader misses subtract w, where w = DYN_IRRIP_CODE_WEIGHT for a code miss and 1 for a data miss
+    PSEL > 512, use irrip, PSEL <= 512 use rrip.   
+
+Experiment parameters:
+    DYN_IRRIP_THRESH_PCT   threshold in percent                         default 25
+    DYN_IRRIP_LEADER_LOG2  k: L2C_SET >> k leader sets (3..7)           default 7 (8 leaders)
+    DYN_IRRIP_EPOCH        leader events between two decisions          default 1024
+    DYN_IRRIP_HYST_PCT     hysteresis half-width in percent             default 0
+    DYN_IRRIP_MODE         0 ratio given in hint, 1 miss share, 2 PSEL dueling    default 0
+    DYN_IRRIP_CODE_WEIGHT  weight of a code miss in PSEL (mode 2)       default 1
+*/
+
+#define maxRRPV 3
+uint32_t l2_rrpv[L2C_SET][L2C_WAY];
+
+// irrip rules:
+#define IRRIP_INS_INSTR 2
+#define IRRIP_INS_DATA 3
+#define IRRIP_PRO_DATA 2
+#define IRRIP_WB_PROMOTE 0
+#define IRRIP_DATA_EVICT 1
+// rrip rules
+#define RRIP_INS (maxRRPV-1) // insertion
+#define RRIP_PRO 0 // promotion
+// PSEL (mode 2)
+#define PSEL_MAX 1023 // counter limit
+#define PSEL_MID 512 // counter start
+
+// decision parameters
+static uint32_t THRESH_PCT = 25;
+static uint32_t LEADER_LOG2 = 7;
+static uint32_t EPOCH = 1024;
+static uint32_t HYST_PCT = 0;
+static uint32_t MODE = 0;
+static uint32_t CODE_WEIGHT = 1;
+
+// set-dueling state
+static bool use_irrip = 0; // current decision (starts as rrip)
+static uint64_t instr_acc = 0, instr_miss = 0, tot_acc = 0, tot_miss = 0;
+static uint32_t events_in_epoch = 0;
+static uint32_t psel = PSEL_MID;
+
+
+// ---- simulator-only statistics for the report (not hardware state) ----
+// collected for the region of interest only (after warm-up)
+static uint64_t roi_epochs = 0, roi_epochs_irrip = 0, roi_switches = 0;
+static uint64_t roi_ratio_min_pm = 1000, roi_ratio_max_pm = 0, roi_ratio_sum_pm = 0;   // per-mille
+// mode 2: misses seen by each leader group (all / code / per request type), region of interest
+static uint64_t roi_lmiss[2] = {0, 0}, roi_lmiss_code[2] = {0, 0}, roi_lmiss_type[2][NUM_TYPES] = {{0}};
+static void print_final_stats();
+
+// read an unsigned knob from the environment (experiment harness only)
+static uint32_t env_knob(const char *name, uint32_t def)
+{
+    const char *v = getenv(name);
+    return v ? (uint32_t)strtoul(v, NULL, 10) : def;
+}
+
+// initialize replacement state
+void CACHE::l2c_initialize_replacement()
+{
+    THRESH_PCT  = env_knob("DYN_IRRIP_THRESH_PCT", THRESH_PCT);
+    LEADER_LOG2 = env_knob("DYN_IRRIP_LEADER_LOG2", LEADER_LOG2);
+    EPOCH       = env_knob("DYN_IRRIP_EPOCH", EPOCH);
+    HYST_PCT    = env_knob("DYN_IRRIP_HYST_PCT", HYST_PCT);
+    MODE        = env_knob("DYN_IRRIP_MODE", MODE);
+    CODE_WEIGHT = env_knob("DYN_IRRIP_CODE_WEIGHT", CODE_WEIGHT);
+
+    std::cout << "==========================================" << std::endl;
+    std::cout << "Initializing Dynamic IRRIP L2C replacement" << std::endl;
+    std::cout << "DYN_IRRIP params: mode=" << MODE << " threshold=" << THRESH_PCT << "% hysteresis=" << HYST_PCT
+              << "% leader_sets=" << (L2C_SET >> LEADER_LOG2) << (MODE == 2 ? " (+ as many I-RRIP leaders)" : "")
+              << " (k=" << LEADER_LOG2 << ") epoch=" << EPOCH << " code_weight=" << CODE_WEIGHT << std::endl;
+    std::cout << "==========================================" << std::endl;
+
+    // l2c_replacement_final_stats() is only called for multi-core runs in this ChampSim
+    // version, so the decision statistics are printed by an exit handler instead
+    atexit(print_final_stats);
+
+    for (int i=0; i<L2C_SET; i++) {
+        for (int j=0; j<L2C_WAY; j++) {
+            l2_rrpv[i][j] = maxRRPV;
+        }
+    }
+}
+
+// find replacement victim
+uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
+{
+    // invalid ways cost nothing, just use them
+    for (int w = 0; w < L2C_WAY; w++)
+        if (!current_set[w].valid)
+            return w;
+
+    // isolate the relevant bits using a mask to test for leader set patterns
+    uint32_t mask = (1u << LEADER_LOG2) - 1;
+    // check if the current set is an rrip leader (Pattern A: bits [2k-1:k] == bits [k-1:0])
+    bool s_leader = ((set >> LEADER_LOG2) & mask) == (set & mask);
+    // check if the current set is an irrip leader (Pattern B: bits [2k-1:k] == NOT bits [k-1:0])
+    bool i_leader = (MODE == 2) && (((set >> LEADER_LOG2) & mask) == (~set & mask));
+
+    // decision based on leaders
+    bool irrip_mode = i_leader || (use_irrip && !s_leader);
+
+    while (1) {
+        if (irrip_mode && IRRIP_DATA_EVICT)
+            for (int w = 0; w < L2C_WAY; w++)
+                if (l2_rrpv[set][w] == maxRRPV && !current_set[w].instruction)
+                    return w;
+
+        for (int w = 0; w < L2C_WAY; w++)
+            if (l2_rrpv[set][w] == maxRRPV)
+                return w;
+
+        for (int w = 0; w < L2C_WAY; w++)
+            l2_rrpv[set][w]++;
+    }
+
+    // WE SHOULD NOT REACH HERE
+    assert(0);
+    return 0;
+}
+
+
+// end of an epoch: take the decision (modes 0/1), record statistics, update the counters
+static void end_of_epoch(uint32_t cpu)
+{
+    uint64_t num = (MODE == 1) ? instr_miss : instr_acc + instr_miss;
+    uint64_t den = (MODE == 1) ? tot_miss : tot_acc + tot_miss;
+    static bool prev_mode = false; // previous decision
+
+    if (MODE != 2) {
+        // ratio > T + h switches on, ratio <= T - h switches off (h = 0: ratio > T)
+        uint64_t on = THRESH_PCT + HYST_PCT;
+        uint64_t off = THRESH_PCT > HYST_PCT ? THRESH_PCT - HYST_PCT : 0;
+        if (!use_irrip && num * 100 > den * on)
+            use_irrip = true;
+        else if (use_irrip && num * 100 <= den * off)
+            use_irrip = false;
+    }
+
+    // measurements for region of interest
+    if (warmup_complete[cpu]) {
+        uint64_t pm = den ? num * 1000 / den : 0; // observed ratio x 1000
+        if (pm < roi_ratio_min_pm) roi_ratio_min_pm = pm;
+        if (pm > roi_ratio_max_pm) roi_ratio_max_pm = pm;
+        roi_ratio_sum_pm += pm;
+        roi_epochs++;
+        if (use_irrip) roi_epochs_irrip++;
+        if (use_irrip != prev_mode) roi_switches++; // counted per epoch in every mode
+    }
+
+    // update decision and halve counters
+    prev_mode = use_irrip;
+    instr_acc >>= 1; instr_miss >>= 1; tot_acc >>= 1; tot_miss >>= 1;
+    events_in_epoch = 0;
+}
+
+
+// called on every cache hit and cache fill
+/*
+extend update_replacement_state() function for all cache types to accept isInstruction parameter of incoming packet. This will help the replacement policy know whether the packet received at the cache is an instruction or not. 
+For find_victim function you can directly access block[set][way].instruction to check whether the block holds instructions or not.
+
+*/
+void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit, uint8_t isInstruction)
+{
+    if ((type == WRITEBACK) && ip)
+        assert(0);
+
+    bool is_code = isInstruction && (type == LOAD || type == PREFETCH);
+
+    // isolate the relevant bits using a mask to test for leader set patterns
+    uint32_t mask = (1u << LEADER_LOG2) - 1;
+    // check if the current set is an rrip leader (Pattern A: bits [2k-1:k] == bits [k-1:0])
+    bool s_leader = ((set >> LEADER_LOG2) & mask) == (set & mask);
+    // check if the current set is an irrip leader (Pattern B: bits [2k-1:k] == NOT bits [k-1:0])
+    bool i_leader = (MODE == 2) && (((set >> LEADER_LOG2) & mask) == (~set & mask));
+
+    // leader sets update counter
+    // writebacks are not program accesses (they are evictions from l1d), so they are not counted.
+    if (type != WRITEBACK) {
+        if (s_leader) {
+            tot_acc++;
+            if (!hit) 
+                tot_miss++;
+
+            if (is_code) {
+                instr_acc++;
+                if (!hit) instr_miss++;
+            }
+        }
+        // mode 2: weighted misses of the two leader groups move PSEL
+        if (MODE == 2 && !hit && (s_leader || i_leader)) {
+            uint32_t w = is_code ? CODE_WEIGHT : 1;
+            if (warmup_complete[cpu]) {
+                int g = s_leader ? 0 : 1;
+                roi_lmiss[g]++;
+                if (is_code) 
+                    roi_lmiss_code[g]++;
+                if (type < NUM_TYPES) 
+                    roi_lmiss_type[g][type]++;
+            }
+            if (s_leader) 
+                psel = (psel + w > PSEL_MAX) ? PSEL_MAX : psel + w;
+            else 
+                psel = (psel < w) ? 0 : psel - w;
+
+            use_irrip = psel > PSEL_MID;
+        }
+
+        if ((s_leader || i_leader) && ++events_in_epoch >= EPOCH)
+            end_of_epoch(cpu);
+    }
+
+    // insertion/promotion
+    bool irrip_mode = i_leader || (use_irrip && !s_leader); // 1 if irrip leader or follower set in irrip decision epoch
+
+    if (irrip_mode) {
+        // promotion
+        if (hit) {
+            if (type != WRITEBACK || IRRIP_WB_PROMOTE)
+                l2_rrpv[set][way] = is_code ? 0 : IRRIP_PRO_DATA;
+        } else
+            l2_rrpv[set][way] = is_code ? IRRIP_INS_INSTR : IRRIP_INS_DATA; // insertion
+    } else {
+        l2_rrpv[set][way] = hit ? RRIP_PRO : RRIP_INS;
+    }
+}
+
+// statistics of the decision logic, region of interest only (simulator-only, not hardware)
+static void print_final_stats()
+{
+    std::cout << "Dynamic IRRIP final stats" << std::endl;
+    std::cout << "DYN_IRRIP mode: " << MODE << " leader sets: " << (L2C_SET >> LEADER_LOG2) << " of " << L2C_SET
+              << " threshold: " << THRESH_PCT << "% hysteresis: " << HYST_PCT << "% epoch: " << EPOCH << std::endl;
+    std::cout << "DYN_IRRIP ROI epochs: " << roi_epochs << " in I-RRIP mode: " << roi_epochs_irrip
+              << " pct_irrip: " << (roi_epochs ? 100.0 * roi_epochs_irrip / roi_epochs : 0.0) << std::endl;
+    if (roi_epochs)
+        std::cout << "DYN_IRRIP ROI ratio(%) min: " << roi_ratio_min_pm / 10.0
+                  << " avg: " << roi_ratio_sum_pm / (10.0 * roi_epochs)
+                  << " max: " << roi_ratio_max_pm / 10.0 << std::endl;
+    std::cout << "DYN_IRRIP ROI switches: " << roi_switches << " final PSEL: " << psel << std::endl;
+    if (MODE == 2) {
+        for (int g = 0; g < 2; g++) {
+            std::cout << "DYN_IRRIP ROI " << (g ? "I-RRIP" : "RRIP") << " leader misses: " << roi_lmiss[g]
+                      << " code: " << roi_lmiss_code[g] << " by type (LOAD RFO PF WB LTR PTR TL1D):";
+            for (int t = 0; t < NUM_TYPES; t++) std::cout << " " << roi_lmiss_type[g][t];
+            std::cout << std::endl;
+        }
+    }
+    std::cout << "DYN_IRRIP final mode: " << (use_irrip ? "I-RRIP" : "RRIP") << std::endl;
+}
+
+// use this function to print out your own stats at the end of simulation
+void CACHE::l2c_replacement_final_stats()
+{
+
+}
