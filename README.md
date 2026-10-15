@@ -1,3 +1,104 @@
+# CS683 - Programming Assignment 2
+## Group: CacheMeIfYouCan
+
+### Project Structure
+
+```text
+cs683-pa2/
+├── LICENSE                       # Project license
+├── Makefile                      # Build rules for compiling the simulator
+├── README.md                     # Project documentation and usage guide
+├── .gitignore                    # Ignore generated/temporary build artifacts
+├── build_champsim.sh             # Generates simulator binaries for selected configs
+├── champsim_sim_run.sh           # Convenience wrapper for simulation runs
+├── bin/                          # Built simulator binaries for different policy configs
+│   ├── baseline                  # Default baseline binary
+│   ├── irrip                    # IRRIP binary
+│   ├── rrip                     # RRIP binary
+│   ├── dyn_irrip                # Dynamic IRRIP binary
+│   └── hashed_perceptron-...    # Configuration-specific compiled binaries
+├── branch/                       # Branch predictor logic and config artifacts
+│   ├── branch_predictor.cc      # Branch predictor implementation
+│   └── hashed_perceptron.bpred  # Predictor config/model file
+├── inc/                          # Core simulator header files and data-structure definitions
+│   ├── block.h                  # Cache block metadata definitions
+│   ├── cache.h                  # Cache subsystem headers
+│   ├── champsim.h               # Shared simulator definitions
+│   ├── dram_controller.h        # DRAM controller interface
+│   ├── instruction.h            # Instruction representation
+│   ├── memory_class.h           # Memory model definitions
+│   ├── ooo_cpu.h                # Out-of-order CPU definitions
+│   ├── set.h                    # Set/associativity utilities
+│   └── uncore.h                 # Uncore and system-level definitions
+├── obj/                          # Intermediate build outputs and object files
+│   ├── branch/                  # Branch object files
+│   ├── prefetcher/              # Prefetcher object files
+│   ├── replacement/             # Replacement-policy object files
+│   └── src/                     # Core simulator object files
+├── plots/                        # Generated performance plots and charts
+│   ├── plot_accuracy.png         # Accuracy comparison plots
+│   ├── plot_coverage.png         # Coverage comparison plots
+│   ├── plot_mpki.png             # MPKI plots
+│   ├── plot_speedup.png          # Speedup plots
+│   └── task2/                   # Task-2 plotting outputs
+├── prefetcher/                   # Prefetcher implementations and config variants
+│   ├── dtlb_prefetcher.cc       # DTLB prefetcher
+│   ├── itlb_prefetcher.cc       # ITLB prefetcher
+│   ├── l1d_prefetcher.cc        # L1D prefetcher
+│   ├── l1i_prefetcher.cc        # L1I prefetcher
+│   ├── l2c_prefetcher.cc        # L2C prefetcher
+│   ├── llc_prefetcher.cc        # LLC prefetcher
+│   ├── stlb_prefetcher.cc       # STLB prefetcher
+│   ├── spp.l1d_pref             # SPP prefetcher config
+│   └── *.l1d_pref               # Other prefetcher config variants
+├── replacement/                  # Replacement-policy implementations and configs
+│   ├── base_replacement.cc      # Base replacement logic
+│   ├── l1d_replacement.cc       # L1D replacement policy
+│   ├── l2c_replacement.cc       # L2 replacement policy
+│   ├── llc_replacement.cc       # LLC replacement policy
+│   ├── dyn_irrip.l2c_repl      # Dynamic IRRIP policy config
+│   ├── irrip.l2c_repl          # IRRIP policy config
+│   ├── rrip.l2c_repl           # RRIP policy config
+│   ├── lru.*.repl               # LRU policy configs
+│   └── *.repl                   # Additional replacement-policy configs
+├── results/                      # Simulation result files and reports
+│   ├── README.md                # Results directory documentation
+│   ├── raw/                     # Raw output files from experiments
+│   ├── output_logs/             # Simulation logs and traces of execution
+│   ├── summary.csv              # Aggregated result summary
+│   └── task2/                   # Task-2 result artifacts
+├── scripts/                      # Automation and analysis scripts
+│   ├── README.md                # Script usage notes
+│   ├── csv_to_latex.py          # CSV-to-LaTeX conversion helper
+│   ├── extract_stats.py         # Extracts key metrics from simulation output
+│   ├── gen_deliverables.py      # Deliverable generation utility
+│   ├── make_plots.py            # Plot generation from CSV data
+│   ├── parse_results.py         # Parses experiment outputs
+│   ├── run_jobs.sh              # Executes simulation jobs
+│   ├── run_matrix.sh            # Runs a sweep/matrix of configs
+│   ├── run_sim.sh               # Runs a single simulation job
+│   ├── task2_report.py          # Task-2 analysis/report script
+│   └── sweep/                   # Sweep configuration files
+├── src/                          # Main C++ implementation of the simulator
+│   ├── block.cc                 # Block functionality implementation
+│   ├── cache.cc                 # Cache implementation
+│   ├── dram_controller.cc       # DRAM controller implementation
+│   ├── main.cc                  # Simulator entry point
+│   ├── ooo_cpu.cc               # Out-of-order CPU implementation
+│   ├── page_table_walker.cc     # Page-walker logic
+│   ├── uncore.cc                # Uncore subsystem implementation
+│   └── ...                      # Remaining simulator source files
+├── traces/                       # Input benchmark traces for simulation
+│   ├── Trace1.gz                # Trace set 1
+│   ├── Trace2.gz                # Trace set 2
+│   ├── Trace3.gz                # Trace set 3
+└── ...
+```
+
+This project is built around the standard ChampSim simulator layout: `src/` and `inc/` contain the core implementation, `replacement/` and `prefetcher/` define policy strategies, and `scripts/` plus `results/` handle benchmarking and reporting.
+
+The traces are git-ignored as instructed.
+
 # ChampSim
 
 ChampSim is a trace-based simulator for microarchitecture research.

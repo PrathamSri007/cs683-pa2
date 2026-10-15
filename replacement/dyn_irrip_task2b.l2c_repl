@@ -1,7 +1,7 @@
 #include "cache.h"
 
 /*
-todo: keep some sample leader sets which decide policy for all other sets
+backup for task 2b after implementation of task 3
 
 we primarily use the formula given as hint in the problem statement
 32/1024 leader sets run rrip policy and report instruction/data workload
