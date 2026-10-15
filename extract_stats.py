@@ -7,7 +7,7 @@ from pathlib import Path
 WARMUP = 25_000_000
 SIMULATION = 25_000_000
 
-CONFIGS = ["baseline", "ipstride", "spp"]
+CONFIGS = ["baseline", "spp", "irrip", "sppirrip"]
 TRACES = ["Trace1", "Trace2", "Trace3"]
 
 
@@ -106,14 +106,14 @@ for config in CONFIGS:
 for trace in TRACES:
 
     baseline = results.get(("baseline", trace))
-    ipstride = results.get(("ipstride", trace))
+    # ipstride = results.get(("ipstride", trace))
 
     if baseline is None:
         continue
 
     baseline_misses = baseline["l1d_load_miss"]
     baseline_ipc = baseline["ipc"]
-    ipstride_ipc = ipstride["ipc"]
+    # ipstride_ipc = ipstride["ipc"]
 
     for config in CONFIGS:
 
@@ -138,7 +138,7 @@ for trace in TRACES:
         else:
             result["l1d_coverage"] = None
         result["baseline_speedup"] = result["ipc"]/baseline_ipc
-        result["ipstride_speedup"] = result["ipc"]/ipstride_ipc
+        # result["ipstride_speedup"] = result["ipc"]/ipstride_ipc
 
 
 # ================================================================

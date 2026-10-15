@@ -34,6 +34,23 @@ Experiment parameters:
     DYN_IRRIP_HYST_PCT     hysteresis half-width in percent             default 0
     DYN_IRRIP_MODE         0 ratio given in hint, 1 miss share, 2 PSEL dueling    default 0
     DYN_IRRIP_CODE_WEIGHT  weight of a code miss in PSEL (mode 2)       default 1
+
+For task 3:
+
+Check type == PREFETCH, if yes then:
+1) insertion : a data prefetch fill inserted at RRPV = PF_INS (default maxRRPV = "distant"). It earns a higher priority with a demand hit.
+(in I-RRIP mode demand data is already inserted at 3, so there the new insertion rule is a no-op; it matters in RRIP mode where demand lines are inserted at 2).
+
+2) promotion : a PREFETCH hit does not change the RRPV (PF_HIT_PROMOTE = 0).
+The first DEMAND hit on a prefetched line promotes it with the normal rule of the active mode, which proves the prefetch useful.
+
+3) eviction  : among the lines that are at RRPV == maxRRPV, a "prefetched but not yet demanded" line is evicted first (PF_EVICT_FIRST = 1), then demand data, then instructions
+(the instruction preference of I-RRIP is unchanged)
+
+Hardware state: 1 "prefetched, not yet used" bit per L2 line + one 10-bit PSEL
+
+parameters:
+DYN_IRRIP_PF_MODE, DYN_IRRIP_PF_INS, DYN_IRRIP_PF_HIT_PROMOTE, DYN_IRRIP_PF_EVICT_FIRST, DYN_IRRIP_PF_DB
 */
 
 #define maxRRPV 3
@@ -60,11 +77,24 @@ static uint32_t HYST_PCT = 0;
 static uint32_t MODE = 0;
 static uint32_t CODE_WEIGHT = 1;
 
+// task 3: prefetch-awareness parameters
+static uint32_t PF_MODE = 2;         // 0 oblivious (= task 2b), 1 always aware, 2 set-dueled
+static uint32_t PF_INS = maxRRPV;    // RRPV of an inserted data prefetch
+static uint32_t PF_HIT_PROMOTE = 0;  // does a prefetch hit promote the line?
+static uint32_t PF_EVICT_FIRST = 1;  // evict unused prefetched lines first among RRPV == maxRRPV
+static uint32_t PF_DB = 16;          // dead band of PF PSEL
+
 // set-dueling state
 static bool use_irrip = 0; // current decision (starts as rrip)
 static uint64_t instr_acc = 0, instr_miss = 0, tot_acc = 0, tot_miss = 0;
 static uint32_t events_in_epoch = 0;
 static uint32_t psel = PSEL_MID;
+
+// task 3 state
+// 1 bit per L2 line: "brought in by a data prefetch and not yet hit by a demand access"
+static bool pf_unused[L2C_SET][L2C_WAY];
+static uint32_t psel_pf = PSEL_MID;   // 10-bit saturating counter: high = aware rules are worse
+static bool use_pf_aware = false;     // current decision for follower sets (starts oblivious)
 
 
 // ---- simulator-only statistics for the report (not hardware state) ----
@@ -73,6 +103,10 @@ static uint64_t roi_epochs = 0, roi_epochs_irrip = 0, roi_switches = 0;
 static uint64_t roi_ratio_min_pm = 1000, roi_ratio_max_pm = 0, roi_ratio_sum_pm = 0;   // per-mille
 // mode 2: misses seen by each leader group (all / code / per request type), region of interest
 static uint64_t roi_lmiss[2] = {0, 0}, roi_lmiss_code[2] = {0, 0}, roi_lmiss_type[2][NUM_TYPES] = {{0}};
+// task 3: prefetch statistics of the region of interest, index [0] = oblivious set, [1] = aware set
+static uint64_t roi_pf_fills[2] = {0, 0}, roi_pf_used[2] = {0, 0}, roi_pf_dead[2] = {0, 0};
+static uint64_t roi_pfd_miss[2] = {0, 0};      // demand misses of the aware(1) / oblivious(0) leader groups
+static uint64_t roi_pf_switches = 0;            // number of flips of the follower decision
 static void print_final_stats();
 
 // read an unsigned knob from the environment (experiment harness only)
@@ -91,12 +125,24 @@ void CACHE::l2c_initialize_replacement()
     HYST_PCT    = env_knob("DYN_IRRIP_HYST_PCT", HYST_PCT);
     MODE        = env_knob("DYN_IRRIP_MODE", MODE);
     CODE_WEIGHT = env_knob("DYN_IRRIP_CODE_WEIGHT", CODE_WEIGHT);
+    PF_MODE        = env_knob("DYN_IRRIP_PF_MODE", PF_MODE);
+    PF_INS         = env_knob("DYN_IRRIP_PF_INS", PF_INS);
+    PF_HIT_PROMOTE = env_knob("DYN_IRRIP_PF_HIT_PROMOTE", PF_HIT_PROMOTE);
+    PF_EVICT_FIRST = env_knob("DYN_IRRIP_PF_EVICT_FIRST", PF_EVICT_FIRST);
+    PF_DB          = env_knob("DYN_IRRIP_PF_DB", PF_DB);
+    if (PF_INS > maxRRPV) PF_INS = maxRRPV;
+    if (LEADER_LOG2 < 2) LEADER_LOG2 = 2;   // the prefetch leader groups need at least 2 index bits
+    // the aware mode starts as the oblivious one (task 2b behaviour) when it is set-dueled
+    use_pf_aware = (PF_MODE == 1);
 
     std::cout << "==========================================" << std::endl;
     std::cout << "Initializing Dynamic IRRIP L2C replacement" << std::endl;
     std::cout << "DYN_IRRIP params: mode=" << MODE << " threshold=" << THRESH_PCT << "% hysteresis=" << HYST_PCT
               << "% leader_sets=" << (L2C_SET >> LEADER_LOG2) << (MODE == 2 ? " (+ as many I-RRIP leaders)" : "")
               << " (k=" << LEADER_LOG2 << ") epoch=" << EPOCH << " code_weight=" << CODE_WEIGHT << std::endl;
+    std::cout << "DYN_IRRIP prefetch awareness: pf_mode=" << PF_MODE << " pf_ins=" << PF_INS
+              << " pf_hit_promote=" << PF_HIT_PROMOTE << " pf_evict_first=" << PF_EVICT_FIRST
+              << " pf_db=" << PF_DB << (PF_MODE == 2 ? " (+ as many aware and oblivious leaders each)" : "") << std::endl;
     std::cout << "==========================================" << std::endl;
 
     // l2c_replacement_final_stats() is only called for multi-core runs in this ChampSim
@@ -106,8 +152,35 @@ void CACHE::l2c_initialize_replacement()
     for (int i=0; i<L2C_SET; i++) {
         for (int j=0; j<L2C_WAY; j++) {
             l2_rrpv[i][j] = maxRRPV;
+            pf_unused[i][j] = false;
         }
     }
+}
+
+// ---- task 3: prefetch-aware leader sets -------------------------------------------------------
+// With d = ((set >> k) ^ set) & mask the I-RRIP/RRIP leaders above are d == mask / d == 0. The two
+// prefetch groups use d == mask>>1 (aware) and d == highest bit of mask (oblivious). For k >= 2 the
+// four values are different, so the groups are disjoint, and each has exactly L2C_SET >> k sets.
+enum { PF_FOLLOWER = 0, PF_LEAD_AWARE = 1, PF_LEAD_OBLIV = 2 };
+
+static inline int pf_leader_kind(uint32_t set)
+{
+    uint32_t mask = (1u << LEADER_LOG2) - 1;
+    uint32_t d = ((set >> LEADER_LOG2) ^ set) & mask;
+    if (d == (mask >> 1))           return PF_LEAD_AWARE;
+    if (d == (mask ^ (mask >> 1)))  return PF_LEAD_OBLIV;
+    return PF_FOLLOWER;
+}
+
+// does this set currently apply the prefetch-aware rules?
+static inline bool pf_aware_for_set(uint32_t set)
+{
+    if (PF_MODE == 0) return false;      // task 2b behaviour
+    if (PF_MODE == 1) return true;       // static: always aware
+    int kind = pf_leader_kind(set);      // PF_MODE == 2: leaders are fixed, followers follow the PSEL decision
+    if (kind == PF_LEAD_AWARE) return true;
+    if (kind == PF_LEAD_OBLIV) return false;
+    return use_pf_aware;
 }
 
 // find replacement victim
@@ -127,8 +200,18 @@ uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, c
 
     // decision based on leaders
     bool irrip_mode = i_leader || (use_irrip && !s_leader);
+    // task 3: do the prefetch-aware rules apply to this set?
+    bool pf_aware = pf_aware_for_set(set);
 
     while (1) {
+        // task 3, eviction rule: a line that was prefetched and never demanded has the least proven
+        // value, so among the lines at RRPV == maxRRPV it goes first (before demand data and,
+        // as before, before any instruction line)
+        if (pf_aware && PF_EVICT_FIRST)
+            for (int w = 0; w < L2C_WAY; w++)
+                if (l2_rrpv[set][w] == maxRRPV && pf_unused[set][w] && !current_set[w].instruction)
+                    return w;
+
         if (irrip_mode && IRRIP_DATA_EVICT)
             for (int w = 0; w < L2C_WAY; w++)
                 if (l2_rrpv[set][w] == maxRRPV && !current_set[w].instruction)
@@ -195,6 +278,10 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t wa
         assert(0);
 
     bool is_code = isInstruction && (type == LOAD || type == PREFETCH);
+    // task 3: a line brought in by a DATA prefetcher (SPP); code prefetches keep the I-RRIP rules
+    bool is_pf_data = (type == PREFETCH) && !isInstruction;
+    // task 3: an access made by the program itself (a prefetch or writeback is not one)
+    bool is_demand = (type == LOAD || type == RFO);
 
     // isolate the relevant bits using a mask to test for leader set patterns
     uint32_t mask = (1u << LEADER_LOG2) - 1;
@@ -239,6 +326,52 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t wa
             end_of_epoch(cpu);
     }
 
+    // task 3: prefetch PSEL. Only demand misses of the two prefetch leader groups move it; a prefetch
+    // miss is not a stall for the core so it is not a measure of how good the policy is.
+    if (PF_MODE == 2 && !hit && is_demand) {
+        int kind = pf_leader_kind(set);
+        if (kind != PF_FOLLOWER) {
+            uint32_t w = is_code ? CODE_WEIGHT : 1;
+            if (kind == PF_LEAD_AWARE)
+                psel_pf = (psel_pf + w > PSEL_MAX) ? PSEL_MAX : psel_pf + w;   // aware missed: aware is worse
+            else
+                psel_pf = (psel_pf < w) ? 0 : psel_pf - w;                      // oblivious missed: aware is better
+            if (warmup_complete[cpu])
+                roi_pfd_miss[kind == PF_LEAD_AWARE]++;
+
+            // dead band: only change the decision when PSEL is clearly away from the midpoint
+            bool prev = use_pf_aware;
+            if (psel_pf + PF_DB < PSEL_MID)       use_pf_aware = true;
+            else if (psel_pf > PSEL_MID + PF_DB)  use_pf_aware = false;
+            if (warmup_complete[cpu] && prev != use_pf_aware) roi_pf_switches++;
+        }
+    }
+
+    bool pf_aware = pf_aware_for_set(set);
+
+    // task 3: book-keeping of the "prefetched, not yet demanded" bit
+    if (!hit) {
+        // a fill: whatever was in this way is evicted now. If it was an unused prefetch, it died unused
+        if (pf_unused[set][way] && warmup_complete[cpu]) roi_pf_dead[pf_aware]++;
+        pf_unused[set][way] = is_pf_data;
+        if (is_pf_data && warmup_complete[cpu]) roi_pf_fills[pf_aware]++;
+    } else if (is_demand && pf_unused[set][way]) {
+        // first demand hit on a prefetched line: the prefetch was useful at L2
+        pf_unused[set][way] = false;
+        if (warmup_complete[cpu]) roi_pf_used[pf_aware]++;
+    }
+
+    // task 3, insertion/promotion rules for a data prefetch in a prefetch-aware set
+    if (pf_aware && is_pf_data) {
+        if (!hit) {
+            l2_rrpv[set][way] = PF_INS;      // insertion: distant, the prefetch has to prove itself
+            return;
+        }
+        if (!PF_HIT_PROMOTE)
+            return;                          // promotion: a reference by the prefetcher is not a reuse
+        // otherwise fall through to the normal promotion rule
+    }
+
     // insertion/promotion
     bool irrip_mode = i_leader || (use_irrip && !s_leader); // 1 if irrip leader or follower set in irrip decision epoch
 
@@ -276,6 +409,20 @@ static void print_final_stats()
         }
     }
     std::cout << "DYN_IRRIP final mode: " << (use_irrip ? "I-RRIP" : "RRIP") << std::endl;
+
+    // task 3 statistics (region of interest; index 1 = sets using the aware rules, 0 = oblivious sets)
+    std::cout << "DYN_IRRIP_PF pf_mode: " << PF_MODE << " final PF PSEL: " << psel_pf
+              << " final PF decision: " << (PF_MODE == 0 ? "oblivious" : (use_pf_aware ? "aware" : "oblivious"))
+              << " PF decision switches: " << roi_pf_switches << std::endl;
+    for (int g = 1; g >= 0; g--) {
+        std::cout << "DYN_IRRIP_PF " << (g ? "aware    " : "oblivious") << " sets: data prefetch fills: " << roi_pf_fills[g]
+                  << " used at L2 (demand hit before eviction): " << roi_pf_used[g]
+                  << " evicted unused: " << roi_pf_dead[g] << std::endl;
+    }
+    if (PF_MODE == 2)
+        std::cout << "DYN_IRRIP_PF leader demand misses aware: " << roi_pfd_miss[1]
+                  << " oblivious: " << roi_pfd_miss[0] << std::endl;
+    std::cout << "DYN_IRRIP_PF storage: " << (uint64_t)L2C_SET * L2C_WAY << " bits (1 prefetched-unused bit/line) + 10 bits PF PSEL" << std::endl;
 }
 
 // use this function to print out your own stats at the end of simulation
