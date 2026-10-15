@@ -1,0 +1,33 @@
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+\textbf{Trace} & \textbf{Configuration} & L1D load MPKI & L2C load MPKI & L2C instruction-load MPKI & L2C data-load MPKI \\
+\midrule
+Trace1 & Baseline & 10.678 & 17.696 & 10.338 & 7.358 \\
+ & SPP & 9.916 & 17.081 & 10.393 & 6.689 \\
+ & Dyn. I-RRIP & 10.680 & 18.628 & 8.950 & 9.678 \\
+ & SPP + Dyn. I-RRIP & 9.928 & 17.798 & 8.921 & 8.877 \\
+\midrule
+Trace2 & Baseline & 13.538 & 27.357 & 18.853 & 8.504 \\
+ & SPP & 13.259 & 27.142 & 18.856 & 8.286 \\
+ & Dyn. I-RRIP & 13.545 & 19.135 & 8.036 & 11.099 \\
+ & SPP + Dyn. I-RRIP & 13.269 & 18.745 & 7.909 & 10.836 \\
+\midrule
+Trace3 & Baseline & 3.403 & 3.954 & 1.124 & 2.830 \\
+ & SPP & 3.297 & 3.769 & 1.148 & 2.621 \\
+ & Dyn. I-RRIP & 3.404 & 3.841 & 0.661 & 3.180 \\
+ & SPP + Dyn. I-RRIP & 3.304 & 3.621 & 0.663 & 2.958 \\
+\midrule
+Mean & Baseline & 7.894 & 12.416 & 6.028 & 5.616 \\
+ & SPP & 7.568 & 12.045 & 6.082 & 5.257 \\
+ & Dyn. I-RRIP & 7.897 & 11.104 & 3.622 & 6.991 \\
+ & SPP + Dyn. I-RRIP & 7.578 & 10.650 & 3.602 & 6.577 \\
+\bottomrule
+\end{tabular}}
+\caption{Load MPKI at L1D and L2C (total, instruction and data).}
+\label{tab:t3-mpki}
+\end{table}

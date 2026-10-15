@@ -1,0 +1,33 @@
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+\textbf{Trace} & \textbf{Configuration} & L1D prefetch accuracy (\%) & L2C prefetch accuracy (\%) & L1D load coverage (\%) & L2C load coverage (\%) \\
+\midrule
+Trace1 & Baseline & N/A & N/A & 0.00 & 0.00 \\
+ & SPP & 46.76 & 8.31 & 7.13 & 3.47 \\
+ & Dyn. I-RRIP & N/A & N/A & -0.02 & -5.27 \\
+ & SPP + Dyn. I-RRIP & 46.91 & 2.76 & 7.03 & -0.58 \\
+\midrule
+Trace2 & Baseline & N/A & N/A & 0.00 & 0.00 \\
+ & SPP & 49.37 & 8.96 & 2.06 & 0.79 \\
+ & Dyn. I-RRIP & N/A & N/A & -0.05 & 30.05 \\
+ & SPP + Dyn. I-RRIP & 49.69 & 3.16 & 1.99 & 31.48 \\
+\midrule
+Trace3 & Baseline & N/A & N/A & 0.00 & 0.00 \\
+ & SPP & 15.61 & 3.07 & 3.13 & 4.68 \\
+ & Dyn. I-RRIP & N/A & N/A & -0.00 & 2.86 \\
+ & SPP + Dyn. I-RRIP & 14.86 & 0.91 & 2.92 & 8.44 \\
+\midrule
+Mean & Baseline & N/A & N/A & 0.00 & 0.00 \\
+ & SPP & 37.25 & 6.78 & 4.11 & 2.98 \\
+ & Dyn. I-RRIP & N/A & N/A & -0.03 & 9.22 \\
+ & SPP + Dyn. I-RRIP & 37.15 & 2.28 & 3.98 & 13.11 \\
+\bottomrule
+\end{tabular}}
+\caption{Prefetch accuracy and load coverage at L1D and L2C (percent).}
+\label{tab:t3-pf}
+\end{table}

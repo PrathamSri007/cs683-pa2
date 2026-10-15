@@ -1,0 +1,33 @@
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+\textbf{Trace} & \textbf{Configuration} & IPC & Speedup over baseline & IPC vs. SPP & IPC vs. Dyn. I-RRIP \\
+\midrule
+Trace1 & Baseline & 0.2323 & 1.0000 & 0.9958 & 0.9942 \\
+ & SPP & 0.2333 & 1.0042 & 1.0000 & 0.9984 \\
+ & Dyn. I-RRIP & 0.2337 & 1.0058 & 1.0016 & 1.0000 \\
+ & SPP + Dyn. I-RRIP & 0.2350 & 1.0114 & 1.0072 & 1.0056 \\
+\midrule
+Trace2 & Baseline & 0.2512 & 1.0000 & 0.9959 & 0.9540 \\
+ & SPP & 0.2522 & 1.0041 & 1.0000 & 0.9579 \\
+ & Dyn. I-RRIP & 0.2633 & 1.0482 & 1.0439 & 1.0000 \\
+ & SPP + Dyn. I-RRIP & 0.2647 & 1.0540 & 1.0497 & 1.0055 \\
+\midrule
+Trace3 & Baseline & 0.3821 & 1.0000 & 0.9976 & 0.9924 \\
+ & SPP & 0.3830 & 1.0024 & 1.0000 & 0.9948 \\
+ & Dyn. I-RRIP & 0.3850 & 1.0076 & 1.0052 & 1.0000 \\
+ & SPP + Dyn. I-RRIP & 0.3862 & 1.0108 & 1.0084 & 1.0032 \\
+\midrule
+Mean & Baseline & 0.2815 & 1.0000 & 0.9964 & 0.9801 \\
+ & SPP & 0.2825 & 1.0036 & 1.0000 & 0.9835 \\
+ & Dyn. I-RRIP & 0.2872 & 1.0204 & 1.0167 & 1.0000 \\
+ & SPP + Dyn. I-RRIP & 0.2885 & 1.0252 & 1.0215 & 1.0047 \\
+\bottomrule
+\end{tabular}}
+\caption{IPC and speedup for the four configurations.}
+\label{tab:t3-perf}
+\end{table}
