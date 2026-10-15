@@ -71,10 +71,18 @@ def apply_tie_policy(raw, mode):
         print("  tie: " + " = ".join(g))
         if mode == "off":
             continue
-        if mode == "auto" and DYN_DEFAULT in g:             
-            TIES["alias"].update({t: DYN_DEFAULT for t in g if t != DYN_DEFAULT})
-            print("       kept once as %s (same default run, other names are aliases)" % DYN_DEFAULT)
-        else:
+        if mode == "auto":
+            # Modified to always keep one representative per tie group
+            if DYN_DEFAULT in g:
+                rep = DYN_DEFAULT
+            elif "irrip_c2d3p3e1w0" in g:
+                rep = "irrip_c2d3p3e1w0"
+            else:
+                rep = g[0]
+            
+            TIES["alias"].update({t: rep for t in g if t != rep})
+            print("       kept once as %s (other names are mapped aliases)" % rep)
+        elif mode == "drop":
             TIES["dropped"].update(g)
             print("       left out of all tables and plots")
     if not groups:
@@ -100,14 +108,27 @@ def geomean(xs):
 def esc(s):
     return s.replace("_", "\\_").replace("%", "\\%")
 
-def table(data, tags, cols, path, caption, label, geo=("speedup", "speedup_rrip", "ipc", "l2c_load_mpki", "l2c_instr_mpki", "l2c_data_mpki", "l2c_total_mpki")):
+def table(data, tags, cols, path, caption, label, geo=("speedup", "speedup_rrip", "ipc", "l2c_load_mpki", "l2c_instr_mpki", "l2c_data_mpki", "l2c_total_mpki"), sort_by=None):
     if not tags: return
     with open(path, "w") as fh:
         fh.write("\\begin{table}[H]\\centering\\small\n\\ifdefined\\fitbx\\else\\newsavebox{\\fitbx}\\fi\n\\sbox{\\fitbx}{\\begin{tabular}{ll" + "r" * len(cols) + "}\\toprule\n")
         fh.write("Trace & Configuration & " + " & ".join(COLS.get(c, esc(c)) for c in cols) + " \\\\ \\midrule\n")
         rows = TRACES + ["geomean"]
         for i, tr in enumerate(rows):
-            for tag, lab in tags:
+            current_tags = tags
+            
+            # Dynamic per-trace sorting logic
+            if sort_by:
+                def get_sort_val(tag_tuple):
+                    t_tag = tag_tuple[0]
+                    if tr == "geomean":
+                        val = geomean([data[(t_tag, t)].get(sort_by) for t in TRACES]) if sort_by in geo else None
+                    else:
+                        val = data[(t_tag, tr)].get(sort_by)
+                    return val if val is not None else float('inf')
+                current_tags = sorted(tags, key=get_sort_val)
+
+            for tag, lab in current_tags:
                 cells = []
                 for c in cols:
                     if tr == "geomean":
@@ -198,8 +219,11 @@ def main():
 
     abl_var = present(d, irrip_variants(d))                  
     abl = present(d, REF) + abl_var
+    
+    # Passing sort_by="l2c_instr_mpki" strictly orders the table rows per trace 
     table(d, abl, ["ipc", "speedup", "speedup_rrip"] + MPKI + ["l2c_trans_mpki", "l2c_instr_evict_data", "l2c_data_evict_instr"], T + "/t2a_all_tests.tex",
-          "All static I-RRIP variants ordered by L2 instruction load MPKI reduction.", "tab:t2a_all_tests")
+          "All static I-RRIP variants ordered by L2 instruction load MPKI reduction in each trace.", "tab:t2a_all_tests", sort_by="l2c_instr_mpki")
+    
     plots_for(d, abl, "t2a_all_tests", P, "Static I-RRIP variants", speedup_tags=[x for x in abl if x[0] != "baseline"])
     bars(d, [x for x in abl if x[0] != "baseline"], "speedup_rrip", P + "/t2a_all_tests_speedup_rrip.png", "Static I-RRIP variants: speedup over SRRIP",
          "Speedup over SRRIP", hline=1.0, with_geo=True, hline_label="SRRIP")
